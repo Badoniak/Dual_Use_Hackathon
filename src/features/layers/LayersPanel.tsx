@@ -4,9 +4,11 @@ import { Eye, EyeOff, GripVertical, Trash2, Maximize, FileUp } from 'lucide-reac
 import { kml } from '@tmcw/togeojson';
 import bbox from '@turf/bbox';
 import { featureCollection, feature } from '@turf/helpers';
+import { useDroneStore } from '../../store/useDroneStore';
 
 export function LayersPanel() {
   const { layers, toggleLayerVisibility, setLayerOpacity, removeLayer, addLayer, setMapBounds } = useMapStore();
+  const { drones, toggleDroneSensor } = useDroneStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -106,6 +108,36 @@ export function LayersPanel() {
             if (file) handleFileUpload(file);
           }}
         />
+      </div>
+
+      {/* Warstwy Sensorów (Drony) */}
+      <div className="mt-4 border-t border-border/40">
+        <div className="p-4 font-semibold text-sm text-primary">
+          Sensory Maszyn
+        </div>
+        <div className="px-2 space-y-4 max-h-[250px] overflow-y-auto custom-scrollbar pb-4">
+          {drones.filter(d => d.telemetryHistory.length > 0 || d.isActive).map(drone => (
+            <div key={drone.id} className="bg-black/20 border border-border/30 rounded-md p-3">
+              <span className="text-sm font-bold text-muted-foreground">{drone.name}</span>
+              <div className="mt-2 space-y-2">
+                {drone.sensors.map(sensor => {
+                  const isChecked = drone.activeSensors.includes(sensor);
+                  return (
+                    <label key={sensor} className="flex items-center gap-2 text-xs cursor-pointer hover:text-foreground transition-colors">
+                      <input 
+                        type="checkbox" 
+                        checked={isChecked}
+                        onChange={() => toggleDroneSensor(drone.id, sensor)}
+                        className="accent-primary w-3 h-3"
+                      />
+                      <span className={isChecked ? 'text-primary font-medium' : 'text-muted-foreground'}>{sensor}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

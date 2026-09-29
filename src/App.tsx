@@ -6,9 +6,11 @@ import { LayersPanel } from './features/layers/LayersPanel';
 import { SectorsPanel } from './features/sectors/SectorsPanel';
 import { DronePanel } from './features/drone/DronePanel';
 import { DetectionsPanel } from './features/drone/DetectionsPanel';
+import { DemoPanel } from './features/demo/DemoPanel';
+import { LogsPanel } from './features/logs/LogsPanel';
 
 function App() {
-  const [rightPanelTab, setRightPanelTab] = useState<'sektory'|'wykrycia'|'dron'>('sektory');
+  const [rightPanelTab, setRightPanelTab] = useState<'sektory'|'wykrycia'|'dron'|'dema'>('sektory');
 
   return (
     <div 
@@ -57,9 +59,15 @@ function App() {
           <LayersPanel />
         </aside>
 
-        {/* Center - Map */}
-        <section className="flex-1 relative">
-          <Map />
+        {/* Center - Map & Logs */}
+        <section className="flex-1 relative flex flex-col min-w-0">
+          <div className="flex-1 relative">
+            <Map />
+          </div>
+          
+          <div className="h-48 shrink-0 border-t border-border">
+            <LogsPanel />
+          </div>
         </section>
 
         {/* Right Panel */}
@@ -78,27 +86,21 @@ function App() {
                 onClick={() => setRightPanelTab('dron')}
                 className={`pb-2 -mb-[9px] ${rightPanelTab === 'dron' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}
               >Dron</button>
+              <button 
+                onClick={() => setRightPanelTab('dema')}
+                className={`pb-2 -mb-[9px] ${rightPanelTab === 'dema' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}
+              >Dema</button>
             </div>
           </div>
           <div className="flex-1 overflow-hidden">
             {rightPanelTab === 'sektory' && <SectorsPanel />}
             {rightPanelTab === 'wykrycia' && <DetectionsPanel />}
             {rightPanelTab === 'dron' && <DronePanel />}
+            {rightPanelTab === 'dema' && <DemoPanel />}
           </div>
         </aside>
       </main>
 
-      {/* Bottom Bar - Timeline */}
-      <footer className="h-16 border-t border-border/40 bg-card/50 flex items-center px-4 shrink-0">
-        <div className="flex items-center gap-4 w-full">
-           <Activity className="h-4 w-4 text-muted-foreground shrink-0" />
-           <div className="h-1 flex-1 bg-muted rounded-full overflow-hidden relative">
-              <div className="absolute left-0 top-0 bottom-0 w-1/3 bg-primary/50" />
-              <div className="absolute left-1/3 w-2 h-full bg-primary -ml-1 rounded-full shadow" />
-           </div>
-           <span className="text-xs text-muted-foreground font-mono shrink-0">Oś czasu akcji</span>
-        </div>
-      </footer>
     </div>
   );
 }
