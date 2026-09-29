@@ -1,14 +1,17 @@
 import { useRef, useState } from 'react';
 import { useMapStore } from '../../store/useMapStore';
-import { Eye, EyeOff, GripVertical, Trash2, Maximize, FileUp } from 'lucide-react';
+import { Eye, EyeOff, GripVertical, Trash2, Maximize, FileUp, Box } from 'lucide-react';
 import { kml } from '@tmcw/togeojson';
 import bbox from '@turf/bbox';
 import { featureCollection, feature } from '@turf/helpers';
 import { useDroneStore } from '../../store/useDroneStore';
+import { useMissionStore } from '../../store/useMissionStore';
+import { PointCloudViewer } from '../viewer/PointCloudViewer';
 
 export function LayersPanel() {
   const { layers, toggleLayerVisibility, setLayerOpacity, removeLayer, addLayer, setMapBounds } = useMapStore();
   const { drones, toggleDroneSensor } = useDroneStore();
+  const { isViewerOpen, openViewer, closeViewer } = useMissionStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -139,6 +142,19 @@ export function LayersPanel() {
           ))}
         </div>
       </div>
+
+      {/* Wizualizator 3D LIDAR / GPR */}
+      <div className="mt-auto border-t border-border/40 p-4">
+        <button
+          onClick={() => openViewer()}
+          className="w-full py-2 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/50 rounded flex items-center justify-center gap-2 text-sm font-bold transition-colors"
+        >
+          <Box className="h-4 w-4" />
+          Otwórz Wizualizator 3D (Lidar / Kamery Głębi)
+        </button>
+      </div>
+
+      {isViewerOpen && <PointCloudViewer onClose={closeViewer} />}
     </div>
   );
 }

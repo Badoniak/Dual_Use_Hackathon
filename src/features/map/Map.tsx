@@ -13,11 +13,20 @@ export function Map() {
   const markers = useRef<maplibregl.Marker[]>([]);
   const droneMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
   const detectionMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
+  const yoloMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
+  const lkpMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
   const draw = useRef<MapboxDraw | null>(null);
   const { layers, mapBounds } = useMapStore();
-  const { lkps, isSelectingLKP, addLKP, gridFeatures, radiusFeatures, setCustomAreas, isDrawingPolygon, setDrawingPolygon } = useMissionStore();
+  const { lkps, yoloDetections, isSelectingLKP, addLKP, gridFeatures, radiusFeatures, setCustomAreas, isDrawingPolygon, setDrawingPolygon, clearDrawTrigger } = useMissionStore();
   const { drones, detections, showPath } = useDroneStore();
   const mapLoaded = useRef(false);
+
+  useEffect(() => {
+    if (draw.current && clearDrawTrigger > 0) {
+      draw.current.deleteAll();
+      setCustomAreas([]); // Upewnijmy się, że stan też jest pusty
+    }
+  }, [clearDrawTrigger]);
 
   useEffect(() => {
     if (draw.current) {
@@ -107,6 +116,8 @@ export function Map() {
     // Remove old layers not in state
     const currentLayerIds = m.getStyle().layers?.map(l => l.id) || [];
     currentLayerIds.forEach(id => {
+      if (id.startsWith('gl-draw-')) return; // Zostaw warstwy od rysowania w spokoju
+
       if (!layers.find(l => l.id === id)) {
         if (m.getLayer(id)) m.removeLayer(id);
         if (m.getSource(id)) m.removeSource(id);
@@ -231,7 +242,7 @@ export function Map() {
 
     if (m.getStyle() && m.getStyle().layers) {
       m.getStyle().layers.forEach(l => {
-        if (l.id.startsWith('sensor-') || l.id.startsWith('drone-path-')) {
+        if (l.id.startsWith('sensor-') || l.id.startsWith('drone-path-') || l.id.startsWith('gl-draw-')) {
           m.moveLayer(l.id);
         }
       });
@@ -521,27 +532,101 @@ export function Map() {
       if (d.status === 'confirmed') color = '#22c55e'; // green
       if (d.status === 'rejected') color = '#6b7280'; // gray
 
+      const popupHtml = `
+        <div class="p-2 w-48 text-black" style="pointer-events: none;">
+          <h4 class="font-bold text-sm mb-1" style="color: ${color}">Wykrycie: ${d.type.toUpperCase()}</h4>
+          <p class="text-xs font-bold mb-1">Pewność: ${d.confidence}%</p>
+          ${d.imageUrl 
+            ? `<img src="${d.imageUrl}" class="w-full h-auto rounded border border-gray-300 mb-1" />` 
+            : `<div class="w-full py-4 bg-gray-100 rounded border border-gray-300 flex items-center justify-center mb-1"><span class="text-xs text-gray-500 italic">(brak zdjecia)</span></div>`
+          }
+          <p class="text-[10px] text-gray-400 mt-1">${new Date(d.timestamp).toLocaleTimeString('pl-PL')} | ${new Date(d.timestamp).toLocaleDateString('pl-PL')}</p>
+        </div>
+      `;
+
+      const popup = new maplibregl.Popup({ offset: 25, closeButton: false, closeOnClick: false })
+        .setHTML(popupHtml);
+
       if (!detectionMarkers.current[d.id]) {
-        detectionMarkers.current[d.id] = new maplibregl.Marker({ color })
+        const mkr = new maplibregl.Marker({ color })
           .setLngLat([d.lng, d.lat])
+          .setPopup(popup)
           .addTo(m);
+        
+        const el = mkr.getElement();
+        el.addEventListener('mouseenter', () => mkr.togglePopup());
+        el.addEventListener('mouseleave', () => mkr.togglePopup());
+        
+        detectionMarkers.current[d.id] = mkr;
       } else {
-        const oldColor = detectionMarkers.current[d.id]._color;
-        if (oldColor !== color) {
-          detectionMarkers.current[d.id].remove();
-          detectionMarkers.current[d.id] = new maplibregl.Marker({ color })
+        const mkr = detectionMarkers.current[d.id];
+        // Aktualizacja koloru standardowego markera maplibre
+        if ((mkr as any)._color !== color) {
+          // Aby zmienić kolor markera domyślnego w maplibre, musimy go stworzyć od nowa
+          mkr.remove();
+          const newMkr = new maplibregl.Marker({ color })
             .setLngLat([d.lng, d.lat])
+            .setPopup(popup)
             .addTo(m);
+          
+          const el = newMkr.getElement();
+          el.addEventListener('mouseenter', () => newMkr.togglePopup());
+          el.addEventListener('mouseleave', () => newMkr.togglePopup());
+          
+          detectionMarkers.current[d.id] = newMkr;
         } else {
-          detectionMarkers.current[d.id].setLngLat([d.lng, d.lat]);
+          mkr.setLngLat([d.lng, d.lat]);
+          mkr.setPopup(popup); // Aktualizacja popupu
         }
       }
+    });
+  };
+
+  const syncYoloDetections = () => {
+    if (!map.current || !mapLoaded.current) return;
+    const m = map.current;
+
+    // Clear old markers
+    Object.values(yoloMarkers.current).forEach(mkr => mkr.remove());
+    yoloMarkers.current = {};
+
+    yoloDetections.forEach(detection => {
+      const el = document.createElement('div');
+      el.className = 'w-6 h-6 bg-orange-500 rounded-md border-2 border-white flex items-center justify-center shadow-lg cursor-pointer hover:scale-110 transition-transform z-50';
+      el.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>`;
+
+      const popupHtml = `
+        <div class="p-2 w-48 text-black" style="pointer-events: none;">
+          <h4 class="font-bold text-sm mb-1 text-orange-600">Wykrycie YOLO</h4>
+          <p class="text-xs text-gray-600 mb-2">${detection.timestamp.toLocaleTimeString('pl-PL')} | ${detection.timestamp.toLocaleDateString('pl-PL')}</p>
+          <img src="${detection.imageUrl}" class="w-full h-auto rounded border border-gray-300 mb-1" />
+          <p class="text-xs font-bold">Pewność: ${detection.confidence}%</p>
+        </div>
+      `;
+
+      const popup = new maplibregl.Popup({ offset: 15, closeButton: false, closeOnClick: false })
+        .setHTML(popupHtml);
+
+      const mkr = new maplibregl.Marker({ element: el })
+        .setLngLat([detection.lng, detection.lat])
+        .setPopup(popup)
+        .addTo(m);
+
+      // Dodanie hover events żeby popup otwierał się po najechaniu myszką
+      el.addEventListener('mouseenter', () => popup.addTo(m));
+      el.addEventListener('mouseleave', () => popup.remove());
+
+      yoloMarkers.current[detection.id] = mkr;
     });
   };
 
   useEffect(() => {
     syncGrid();
   }, [lkps, gridFeatures, radiusFeatures]);
+
+  useEffect(() => {
+    syncYoloDetections();
+  }, [yoloDetections]);
 
   useEffect(() => {
     syncDrones();

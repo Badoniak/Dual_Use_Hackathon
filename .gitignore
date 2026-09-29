@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Data folders
+session_20260929_215852/
+public/session_20260929_191909/

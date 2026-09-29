@@ -6,11 +6,14 @@ export interface LogEntry {
   message: string;
   type: 'info' | 'success' | 'warning' | 'error';
   source: 'SYSTEM' | 'DRON' | 'DOWÓDCA';
+  imageUrl?: string;
+  confidence?: number;
 }
 
 interface LogStore {
   logs: LogEntry[];
   addLog: (message: string, type?: LogEntry['type'], source?: LogEntry['source']) => void;
+  addAnomaly: (message: string, imageUrl: string, confidence: number) => void;
   clearLogs: () => void;
 }
 
@@ -35,6 +38,21 @@ export const useLogStore = create<LogStore>((set) => ({
         source
       };
       // Przechowujemy tylko ostatnie 50 logów by nie zaśmiecać pamięci
+      return { logs: [newLog, ...state.logs].slice(0, 50) };
+    });
+  },
+
+  addAnomaly: (message, imageUrl, confidence) => {
+    set((state) => {
+      const newLog: LogEntry = {
+        id: Math.random().toString(36).substring(7),
+        timestamp: new Date(),
+        message,
+        type: 'warning',
+        source: 'DRON',
+        imageUrl,
+        confidence
+      };
       return { logs: [newLog, ...state.logs].slice(0, 50) };
     });
   },

@@ -8,25 +8,42 @@ export interface LKPPoint {
   radiusKm: number;
 }
 
+export interface YOLODetection {
+  id: string;
+  lng: number;
+  lat: number;
+  imageUrl: string;
+  confidence: number;
+  timestamp: Date;
+}
+
 export interface SectorConfig {
   sectorSizeKm: number;
 }
 
 interface MissionState {
   lkps: LKPPoint[]; 
+  yoloDetections: YOLODetection[];
   isSelectingLKP: boolean;
   config: SectorConfig;
   gridFeatures: any | null; 
   radiusFeatures: any | null; 
   customAreas: any[];
   isDrawingPolygon: boolean;
+  clearDrawTrigger: number;
+  isViewerOpen: boolean;
+  viewerUrl: string | null;
   
+  addYOLODetection: (detection: Omit<YOLODetection, 'id' | 'timestamp'>) => void;
   setSelectingLKP: (val: boolean) => void;
+  openViewer: (url?: string) => void;
+  closeViewer: () => void;
   setDrawingPolygon: (val: boolean) => void;
   addLKP: (lng: number, lat: number) => void;
   updateLKP: (id: string, radiusKm: number) => void;
   removeLKP: (id: string) => void;
   setCustomAreas: (features: any[]) => void;
+  triggerClearDraw: () => void;
   updateConfig: (config: Partial<SectorConfig>) => void;
   generateGrid: () => void;
   clearSectors: () => void;
@@ -34,6 +51,7 @@ interface MissionState {
 
 export const useMissionStore = create<MissionState>((set, get) => ({
   lkps: [],
+  yoloDetections: [],
   isSelectingLKP: false,
   config: {
     sectorSizeKm: 0.5, 
@@ -42,7 +60,26 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   radiusFeatures: null,
   customAreas: [],
   isDrawingPolygon: false,
+  clearDrawTrigger: 0,
+  isViewerOpen: false,
+  viewerUrl: null,
 
+  addYOLODetection: (detection) => {
+    set((state) => ({
+      yoloDetections: [
+        ...state.yoloDetections,
+        {
+          ...detection,
+          id: Math.random().toString(36).substring(7),
+          timestamp: new Date()
+        }
+      ]
+    }));
+  },
+
+  openViewer: (url?: string) => set({ isViewerOpen: true, viewerUrl: url || null }),
+  closeViewer: () => set({ isViewerOpen: false, viewerUrl: null }),
+  
   setSelectingLKP: (val) => set({ isSelectingLKP: val }),
   setDrawingPolygon: (val) => set({ isDrawingPolygon: val }),
   
@@ -77,7 +114,10 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   setCustomAreas: (features) => {
     set({ customAreas: features });
     if (get().lkps.length > 0 || features.length > 0) get().generateGrid();
+    else get().generateGrid(); // To force clearing the grid if everything was removed
   },
+
+  triggerClearDraw: () => set((state) => ({ clearDrawTrigger: state.clearDrawTrigger + 1, customAreas: [] })),
 
   updateConfig: (config) => {
     set((state) => ({ config: { ...state.config, ...config } }));
@@ -157,5 +197,11 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set({ gridFeatures: grid, radiusFeatures: radiusCollection });
   },
 
-  clearSectors: () => set({ lkps: [], customAreas: [], gridFeatures: null, radiusFeatures: null })
+  clearSectors: () => set((state) => ({ 
+    lkps: [], 
+    customAreas: [], 
+    gridFeatures: null, 
+    radiusFeatures: null,
+    clearDrawTrigger: state.clearDrawTrigger + 1 
+  }))
 }));

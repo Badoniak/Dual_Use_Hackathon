@@ -111,9 +111,18 @@ export function SectorsPanel() {
           </button>
           
           {customAreas.length > 0 && (
-            <p className="text-xs text-muted-foreground mt-2 text-center">
-              Liczba narysowanych obszarów: {customAreas.length}
-            </p>
+            <div className="flex items-center justify-between mt-2 px-1">
+              <p className="text-xs text-muted-foreground">
+                Obszarów: {customAreas.length}
+              </p>
+              <button 
+                onClick={() => useMissionStore.getState().triggerClearDraw()}
+                className="text-xs text-destructive hover:underline flex items-center gap-1"
+              >
+                <Trash2 className="h-3 w-3" />
+                Usuń wszystkie
+              </button>
+            </div>
           )}
         </div>
       </div>

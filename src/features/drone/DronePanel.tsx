@@ -56,8 +56,8 @@ export function DronePanel() {
               if (Math.random() > 0.96) {
                 const randomSensor = drone.sensors[Math.floor(Math.random() * drone.sensors.length)];
                 const detId = addDetection({
-                  lng: lng + (Math.random() - 0.5) * 0.002,
-                  lat: lat + (Math.random() - 0.5) * 0.002,
+                  lng: lng + (Math.random() - 0.5) * 0.01,
+                  lat: lat + (Math.random() - 0.5) * 0.01,
                   confidence: Math.round(70 + Math.random() * 25),
                   type: 'anomaly',
                   droneId: drone.id,
@@ -79,8 +79,8 @@ export function DronePanel() {
                 if (Math.random() > 0.5) {
                   const randomSensor = drone.sensors[Math.floor(Math.random() * drone.sensors.length)];
                   addDetection({
-                    lng: lng + (Math.random() - 0.5) * 0.001,
-                    lat: lat + (Math.random() - 0.5) * 0.001,
+                    lng: lng + (Math.random() - 0.5) * 0.005, // Zwiększony rozrzut, żeby punkty się nie nakładały
+                    lat: lat + (Math.random() - 0.5) * 0.005, // Zwiększony rozrzut, żeby punkty się nie nakładały
                     confidence: Math.round(80 + Math.random() * 15),
                     type: 'person',
                     droneId: drone.id,
@@ -143,10 +143,18 @@ export function DronePanel() {
       }
     }
     
+    let finalDrones = [...selectedDrones];
+
+    if (startPhase === 'faza2' && waypoints.length > 0 && finalDrones.length > waypoints.length) {
+      const reducedCount = finalDrones.length - waypoints.length;
+      finalDrones = finalDrones.slice(0, waypoints.length);
+      useLogStore.getState().addLog(`Uziemiono ${reducedCount} dron(ów) z powodu braku wystarczającej liczby celów (hotspotów).`, 'warning', 'SYSTEM');
+    }
+    
     const startLng = waypoints.length > 0 ? waypoints[0][0] - 0.001 : 21.9990;
     const startLat = waypoints.length > 0 ? waypoints[0][1] - 0.001 : 50.0412;
 
-    launchDrones(selectedDrones, startLng, startLat, waypoints);
+    launchDrones(finalDrones, startLng, startLat, waypoints);
     setSelectedDrones([]);
   };
 
