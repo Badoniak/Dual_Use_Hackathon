@@ -1,675 +1,483 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
+import type { GeoJSONSource, Map as MLMap, ImageSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { circle } from '@turf/turf';
+import type { Feature, FeatureCollection } from 'geojson';
 import { useMapStore } from '../../store/useMapStore';
-import { useMissionStore } from '../../store/useMissionStore';
-import { useDroneStore } from '../../store/useDroneStore';
-import MapboxDraw from '@mapbox/mapbox-gl-draw';
-import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
+import { useMissionStore, sourceRange, type RadarDetection } from '../../store/useMissionStore';
+import { useDroneStore, STATUS_LABEL, type Drone } from '../../store/useDroneStore';
+import { lngLatToLocal, localToLngLat } from '../../sim/geo';
+import { planCoverage } from '../../sim/flightPlan';
+import type { GeoAnchor, Hotspot } from '../../sim/types';
+import { DrawController } from './drawing';
+import { rasterToDataUrl } from './rasters';
+import { HOTSPOT_COLORS, SIM_SITE } from './constants';
+import { ScanLayer, cloudColors } from './scanLayer';
+import { ironbow } from '../../sim/thermal';
+
+const EMPTY: FeatureCollection = { type: 'FeatureCollection', features: [] };
+const MISSION_BOTTOM = 'areas-fill';
+
+const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+
+function ll(a: GeoAnchor, x: number, y: number): [number, number] {
+  return localToLngLat(a, x, y);
+}
+
+function setData(map: MLMap, id: string, data: FeatureCollection) {
+  (map.getSource(id) as GeoJSONSource | undefined)?.setData(data);
+}
+
+function addMissionLayers(map: MLMap) {
+  for (const id of ['areas', 'zones', 'audibility', 'scout-plan', 'trails', 'links', 'landing', 'truth']) map.addSource(id, { type: 'geojson', data: EMPTY });
+  map.addLayer({ id: 'areas-fill', type: 'fill', source: 'areas', paint: { 'fill-color': ['case', ['get', 'active'], '#f59e0b', '#94a3b8'], 'fill-opacity': ['case', ['get', 'active'], 0.12, 0.06] } });
+  map.addLayer({ id: 'areas-line', type: 'line', source: 'areas', paint: { 'line-color': ['case', ['get', 'active'], '#f59e0b', '#94a3b8'], 'line-width': ['case', ['get', 'active'], 2.5, 1.5], 'line-dasharray': [3, 2] } });
+  map.addLayer({
+    id: 'audibility-heat', type: 'heatmap', source: 'audibility',
+    paint: {
+      'heatmap-weight': ['interpolate', ['linear'], ['get', 'snr'], 6, 0.05, 25, 1],
+      'heatmap-radius': ['interpolate', ['exponential', 2], ['zoom'], 14, 6, 19, 60],
+      'heatmap-opacity': 0.55,
+      'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(168,85,247,0)', 0.3, 'rgba(168,85,247,0.35)', 0.7, 'rgba(236,72,153,0.7)', 1, 'rgba(253,224,71,0.9)'],
+    },
+  });
+  map.addLayer({ id: 'zones-fill', type: 'fill', source: 'zones', paint: { 'fill-color': '#a855f7', 'fill-opacity': 0.07 } });
+  map.addLayer({ id: 'zones-line', type: 'line', source: 'zones', paint: { 'line-color': '#a855f7', 'line-width': 1.5, 'line-dasharray': [1, 1.5] } });
+  map.addLayer({ id: 'scout-plan-line', type: 'line', source: 'scout-plan', paint: { 'line-color': '#60a5fa', 'line-width': 2, 'line-opacity': 0.7, 'line-dasharray': [2, 2] } });
+  map.addLayer({ id: 'trails-line', type: 'line', source: 'trails', paint: { 'line-color': ['case', ['==', ['get', 'role'], 'scout'], '#3b82f6', '#22c55e'], 'line-width': 2, 'line-opacity': 0.85 } });
+  map.addLayer({ id: 'links-line', type: 'line', source: 'links', paint: { 'line-color': '#e5e7eb', 'line-width': 1, 'line-opacity': 0.5, 'line-dasharray': [2, 2] } });
+  map.addLayer({
+    id: 'landing-circle', type: 'circle', source: 'landing',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 15, 3, 20, 9],
+      'circle-color': ['match', ['get', 'state'], 'vital', '#22c55e', 'none', '#64748b', 'busy', '#facc15', '#0ea5e9'],
+      'circle-stroke-color': ['case', ['==', ['get', 'method'], 'probe'], '#f59e0b', '#ffffff'],
+      'circle-stroke-width': ['case', ['==', ['get', 'method'], 'probe'], 2.5, 1.5],
+    },
+  });
+  map.addLayer({ id: 'truth-circle', type: 'circle', source: 'truth', paint: { 'circle-radius': 6, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#f472b6', 'circle-stroke-width': 2 } });
+}
+
+function droneElement(d: Drone): HTMLDivElement {
+  const el = document.createElement('div');
+  el.className = 'drone-marker';
+  el.dataset.droneId = d.id;
+  const color = d.role === 'scout' ? '#3b82f6' : '#22c55e';
+  el.innerHTML = `
+    <div class="drone-ring"></div>
+    <svg class="drone-arrow" width="26" height="26" viewBox="0 0 24 24"><path d="M12 2 L20 21 L12 16 L4 21 Z" fill="${color}" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>
+    <div class="drone-label">${d.role === 'scout' ? 'Z-1' : 'R-' + d.id.split('-')[1]}</div>`;
+  return el;
+}
+
+const PERSON_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="6" r="4"/><path d="M4 22c0-5 3.6-8 8-8s8 3 8 8z"/></svg>';
+
+function hotspotElement(h: Hotspot, selected: boolean): HTMLDivElement {
+  const el = document.createElement('div');
+  const color = HOTSPOT_COLORS[h.kind];
+  const dim = h.confidence < 0.5;
+  el.className = `hotspot-marker${selected ? ' selected' : ''}${dim ? ' dim' : ''}`;
+  el.dataset.hotspotId = h.id;
+  const bar = (v: number, c: string) => `<span style="display:block;height:3px;width:${Math.round(v * 22)}px;background:${c}"></span>`;
+  el.innerHTML = `<div class="hotspot-dot" style="background:${color}">${h.kind === 'manual' ? '✚' : PERSON_SVG}</div>
+    <div class="hotspot-label">${h.id} ${(h.confidence * 100).toFixed(0)}%${h.kind === 'fused' ? `<span class="hotspot-bars">${bar(h.evidence.thermal, '#f87171')}${bar(h.evidence.acoustic, '#c084fc')}</span>` : ''}</div>`;
+  return el;
+}
+
+function detectionElement(d: RadarDetection): HTMLDivElement {
+  const el = document.createElement('div');
+  el.className = `detection-marker ${d.vital ? 'vital' : 'none'} ${d.status}`;
+  const depth = d.estimate ? `${d.estimate.depthMin.toFixed(1)}–${d.estimate.depthMax.toFixed(1)} m` : d.vital ? 'głęb. ?' : 'brak';
+  el.innerHTML = `<div class="detection-pulse"></div><div class="detection-core">${d.vital ? '♥' : '–'}</div><div class="detection-label">${d.hotspotId} · ${depth}</div>`;
+  return el;
+}
+
+function hotspotPopup(h: Hotspot): string {
+  const reasons = h.reasons.map(r => `<li>${esc(r)}</li>`).join('');
+  return `<div class="map-popup">
+    <div class="map-popup-title" style="color:${HOTSPOT_COLORS[h.kind]}">${h.id} · ${esc(h.label)}</div>
+    <div class="map-popup-conf">Ufność: <b>${(h.confidence * 100).toFixed(0)}%</b>${h.radarCandidate ? ' · do pomiaru radarem' : ''}</div>
+    <div class="map-popup-ev"><span class="t">Termowizja ${(h.evidence.thermal * 100).toFixed(0)}%</span> <span class="a">Mikrofon ${(h.evidence.acoustic * 100).toFixed(0)}%</span></div>
+    <ul><li>${esc(h.thermalNote)}</li><li>${esc(h.acousticNote)}</li>${reasons}</ul></div>`;
+}
 
 export function Map() {
-  const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<maplibregl.Map | null>(null);
-  const markers = useRef<maplibregl.Marker[]>([]);
-  const droneMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
-  const detectionMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
-  const yoloMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
-  const lkpMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
-  const draw = useRef<MapboxDraw | null>(null);
-  const { layers, mapBounds } = useMapStore();
-  const { lkps, yoloDetections, isSelectingLKP, addLKP, gridFeatures, radiusFeatures, setCustomAreas, isDrawingPolygon, setDrawingPolygon, clearDrawTrigger } = useMissionStore();
-  const { drones, detections, showPath } = useDroneStore();
-  const mapLoaded = useRef(false);
+  const container = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MLMap | null>(null);
+  const drawRef = useRef<DrawController | null>(null);
+  const baseIds = useRef<Set<string>>(new Set());
+  const droneMarkers = useRef<Record<string, maplibregl.Marker>>({});
+  const hotspotMarkers = useRef<maplibregl.Marker[]>([]);
+  const detectionMarkers = useRef<maplibregl.Marker[]>([]);
+  const [ready, setReady] = useState(false);
+  const scanLayer = useRef(new ScanLayer());
+  const scanCount = useRef(-1);
+  const [pitched, setPitched] = useState(false);
 
+  const layers = useMapStore(s => s.layers);
+  const mapBounds = useMapStore(s => s.mapBounds);
+  const areas = useMissionStore(s => s.areas);
+  const activeAreaId = useMissionStore(s => s.activeAreaId);
+  const drawMode = useMissionStore(s => s.drawMode);
+  const anchor = useMissionStore(s => s.anchor);
+  const result = useMissionStore(s => s.result);
+  const phase = useMissionStore(s => s.phase);
+  const hotspots = useMissionStore(s => s.hotspots);
+  const landingSites = useMissionStore(s => s.landingSites);
+  const measurements = useMissionStore(s => s.measurements);
+  const detections = useMissionStore(s => s.detections);
+  const scoutTrack = useMissionStore(s => s.scoutTrack);
+  const mapLayers = useMissionStore(s => s.mapLayers);
+  const scan = useMissionStore(s => s.scan);
+  const flightAltitude = useMissionStore(s => s.flightAltitude);
+  const revealed = useMissionStore(s => s.revealed);
+  const selectedHotspotId = useMissionStore(s => s.selectedHotspotId);
+  const simVictims = useMissionStore(s => s.simVictims);
+  const flyToTrigger = useMissionStore(s => s.flyToTrigger);
+
+  // --- inicjalizacja mapy
   useEffect(() => {
-    if (draw.current && clearDrawTrigger > 0) {
-      draw.current.deleteAll();
-      setCustomAreas([]); // Upewnijmy się, że stan też jest pusty
-    }
-  }, [clearDrawTrigger]);
-
-  useEffect(() => {
-    if (draw.current) {
-      if (isDrawingPolygon) {
-        draw.current.changeMode('draw_polygon');
-      } else {
-        try {
-          draw.current.changeMode('simple_select');
-        } catch (e) {}
-      }
-    }
-  }, [isDrawingPolygon]);
-
-  // Initialize Map
-  useEffect(() => {
-    if (map.current || !mapContainer.current) return;
-
-    map.current = new maplibregl.Map({
-      container: mapContainer.current,
-      style: {
-        version: 8,
-        sources: {
-          'osm-base': {
-            type: 'raster',
-            tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'],
-            tileSize: 256
-          }
+    if (!container.current) return;
+    const map = new maplibregl.Map({
+      container: container.current,
+      style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0b1220' } }] },
+      center: SIM_SITE,
+      zoom: 16.5,
+      maxZoom: 21,
+      attributionControl: { compact: true },
+    });
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+    mapRef.current = map;
+    (window as unknown as { __map?: MLMap }).__map = map;
+    map.on('load', () => {
+      addMissionLayers(map);
+      map.addLayer(scanLayer.current, 'audibility-heat');
+      drawRef.current = new DrawController(map, {
+        onPolygon: (f, source) => {
+          const ms = useMissionStore.getState();
+          ms.addArea(f, source);
+          ms.setDrawMode('none');
         },
-        layers: [
-          {
-            id: 'osm-base',
-            type: 'raster',
-            source: 'osm-base'
-          }
-        ]
-      },
-      center: [21.9990, 50.0412], 
-      zoom: 12
+        onPoint: (mode, lng, lat) => {
+          const ms = useMissionStore.getState();
+          if (mode === 'lkp') ms.addLkpArea(lng, lat);
+          else if (mode === 'manual-hotspot') ms.addManualHotspot(lng, lat);
+          else if (mode === 'sim-victim') ms.addSimVictim(lng, lat, ms.victimDepthM);
+        },
+        onCancel: () => useMissionStore.getState().setDrawMode('none'),
+      });
+      setReady(true);
     });
-
-    draw.current = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: {} // Ukrywamy natywne kontrolki Mapbox, użyjemy własnego przycisku w panelu
-    });
-    map.current.addControl(draw.current, 'top-left');
-
-    const updateAreas = () => {
-      if (draw.current) {
-        const data = draw.current.getAll();
-        setCustomAreas(data.features);
-      }
+    const markers = droneMarkers.current;
+    return () => {
+      drawRef.current?.destroy();
+      drawRef.current = null;
+      Object.values(markers).forEach(m => m.remove());
+      for (const k of Object.keys(markers)) delete markers[k];
+      baseIds.current.clear();
+      map.remove();
+      mapRef.current = null;
+      setReady(false);
     };
-
-    const stopDrawing = () => {
-      updateAreas();
-      setDrawingPolygon(false);
-    };
-
-    map.current.on('draw.create', stopDrawing);
-    map.current.on('draw.delete', updateAreas);
-    map.current.on('draw.update', updateAreas);
-    const clickHandler = (e: maplibregl.MapMouseEvent) => {
-      if (useMissionStore.getState().isSelectingLKP) {
-        useMissionStore.getState().addLKP(e.lngLat.lng, e.lngLat.lat);
-      }
-    };
-
-    const initMap = () => {
-      mapLoaded.current = true;
-      map.current?.on('click', clickHandler);
-      syncLayers(); // Initial sync
-      syncGrid();
-    };
-
-    if (map.current.loaded()) {
-      initMap();
-    } else {
-      map.current.on('load', initMap);
-    }
   }, []);
 
-  // Sync Layers
-  const syncLayers = () => {
-    if (!map.current || !mapLoaded.current) return;
-    const m = map.current;
-
-    // Remove old layers not in state
-    const currentLayerIds = m.getStyle().layers?.map(l => l.id) || [];
-    currentLayerIds.forEach(id => {
-      if (id.startsWith('gl-draw-')) return; // Zostaw warstwy od rysowania w spokoju
-
-      if (!layers.find(l => l.id === id)) {
-        if (m.getLayer(id)) m.removeLayer(id);
-        if (m.getSource(id)) m.removeSource(id);
-      }
-    });
-
-    // Add or update layers
+  // --- warstwy bazowe (OSM, ortofotomapa, wgrane GeoJSON/KML) — zawsze pod warstwami misji
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    const wanted = new Set<string>();
     [...layers].reverse().forEach(layer => {
-      // 1. Add Source if not exists
+      const ids = layer.type === 'geojson' ? [layer.id + '-fill', layer.id + '-line', layer.id + '-circle'] : [layer.id];
+      ids.forEach(i => wanted.add(i));
       if (!m.getSource(layer.id)) {
-        if (layer.type === 'raster' && layer.url) {
-          m.addSource(layer.id, {
-            type: 'raster',
-            tiles: [layer.url],
-            tileSize: 256
-          });
-        } else if (layer.type === 'wms' && layer.url) {
-          m.addSource(layer.id, {
-            type: 'raster',
-            tiles: [`${layer.url}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=Raster&WIDTH=256&HEIGHT=256&SRS=EPSG:3857&BBOX={bbox-epsg-3857}`],
-            tileSize: 256
-          });
-        } else if (layer.type === 'geojson' && layer.data) {
-          m.addSource(layer.id, {
-            type: 'geojson',
-            data: layer.data
-          });
-        }
+        if (layer.type === 'raster' && layer.url) m.addSource(layer.id, { type: 'raster', tiles: [layer.url], tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap' });
+        else if (layer.type === 'wms' && layer.url) m.addSource(layer.id, { type: 'raster', tiles: [`${layer.url}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&FORMAT=image/png&TRANSPARENT=true&LAYERS=Raster&STYLES=&WIDTH=256&HEIGHT=256&SRS=EPSG:3857&BBOX={bbox-epsg-3857}`], tileSize: 256, attribution: '© GUGiK' });
+        else if (layer.type === 'geojson' && layer.data) m.addSource(layer.id, { type: 'geojson', data: layer.data });
       }
-
-      // 2. Add Layer if not exists
-      if (!m.getLayer(layer.id) && m.getSource(layer.id)) {
-        if (layer.type === 'raster' || layer.type === 'wms') {
-          m.addLayer({
-            id: layer.id,
-            type: 'raster',
-            source: layer.id,
-            layout: { visibility: layer.visible ? 'visible' : 'none' },
-            paint: { 'raster-opacity': layer.opacity }
-          });
-        } else if (layer.type === 'geojson') {
-          // Add line and fill and circle
-          m.addLayer({
-            id: layer.id, // we might need multiple layers for geojson, but keep it simple
-            type: 'line',
-            source: layer.id,
-            layout: { visibility: layer.visible ? 'visible' : 'none' },
-            paint: {
-              'line-color': '#ff0000',
-              'line-width': 3,
-              'line-opacity': layer.opacity
-            },
-            filter: ['==', ['geometry-type'], 'LineString']
-          });
-          m.addLayer({
-            id: `${layer.id}-fill`,
-            type: 'fill',
-            source: layer.id,
-            layout: { visibility: layer.visible ? 'visible' : 'none' },
-            paint: {
-              'fill-color': '#ff0000',
-              'fill-opacity': layer.opacity * 0.2
-            },
-            filter: ['==', ['geometry-type'], 'Polygon']
-          });
-           m.addLayer({
-            id: `${layer.id}-circle`,
-            type: 'circle',
-            source: layer.id,
-            layout: { visibility: layer.visible ? 'visible' : 'none' },
-            paint: {
-              'circle-color': '#ff0000',
-              'circle-radius': 5,
-              'circle-opacity': layer.opacity
-            },
-            filter: ['==', ['geometry-type'], 'Point']
-          });
+      if (!m.getSource(layer.id)) return;
+      const vis = layer.visible ? 'visible' : 'none';
+      if (layer.type === 'geojson') {
+        if (!m.getLayer(layer.id + '-fill')) {
+          m.addLayer({ id: layer.id + '-fill', type: 'fill', source: layer.id, filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#ef4444', 'fill-opacity': 0.2 } }, MISSION_BOTTOM);
+          m.addLayer({ id: layer.id + '-line', type: 'line', source: layer.id, filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#ef4444', 'line-width': 2 } }, MISSION_BOTTOM);
+          m.addLayer({ id: layer.id + '-circle', type: 'circle', source: layer.id, filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-color': '#ef4444', 'circle-radius': 5 } }, MISSION_BOTTOM);
         }
+        m.setPaintProperty(layer.id + '-fill', 'fill-opacity', layer.opacity * 0.2);
+        m.setPaintProperty(layer.id + '-line', 'line-opacity', layer.opacity);
+        m.setPaintProperty(layer.id + '-circle', 'circle-opacity', layer.opacity);
+        ids.forEach(i => m.setLayoutProperty(i, 'visibility', vis));
+      } else {
+        if (!m.getLayer(layer.id)) m.addLayer({ id: layer.id, type: 'raster', source: layer.id }, MISSION_BOTTOM);
+        m.setLayoutProperty(layer.id, 'visibility', vis);
+        m.setPaintProperty(layer.id, 'raster-opacity', layer.opacity);
       }
-
-      // 3. Update visibility & opacity
-      if (m.getLayer(layer.id)) {
-        m.setLayoutProperty(layer.id, 'visibility', layer.visible ? 'visible' : 'none');
-        if (layer.type === 'raster' || layer.type === 'wms') {
-          m.setPaintProperty(layer.id, 'raster-opacity', layer.opacity);
-        } else if (layer.type === 'geojson') {
-          m.setPaintProperty(layer.id, 'line-opacity', layer.opacity);
-          if (m.getLayer(`${layer.id}-fill`)) {
-            m.setLayoutProperty(`${layer.id}-fill`, 'visibility', layer.visible ? 'visible' : 'none');
-            m.setPaintProperty(`${layer.id}-fill`, 'fill-opacity', layer.opacity * 0.2);
-          }
-           if (m.getLayer(`${layer.id}-circle`)) {
-            m.setLayoutProperty(`${layer.id}-circle`, 'visibility', layer.visible ? 'visible' : 'none');
-            m.setPaintProperty(`${layer.id}-circle`, 'circle-opacity', layer.opacity);
-          }
-        }
-      }
+      ids.forEach(i => m.getLayer(i) && m.moveLayer(i, MISSION_BOTTOM));
     });
-
-    // 4. Reorder layers
-    // Note: layers array is top-to-bottom in UI, but maplibre draws them bottom-to-top
-    // So we iterate backwards (which we did) and move them to front
-    // But wait, it's easier to just move layers:
-    const reversed = [...layers].reverse();
-    for (let i = 0; i < reversed.length; i++) {
-      const l = reversed[i];
-      if (m.getLayer(l.id)) m.moveLayer(l.id);
-      if (m.getLayer(`${l.id}-fill`)) m.moveLayer(`${l.id}-fill`);
-      if (m.getLayer(`${l.id}-circle`)) m.moveLayer(`${l.id}-circle`);
+    // usunięcie warstw bazowych, których już nie ma w stanie (tylko zarządzanych tutaj!)
+    for (const id of baseIds.current) {
+      if (wanted.has(id)) continue;
+      if (m.getLayer(id)) m.removeLayer(id);
+      const srcId = id.replace(/-(fill|line|circle)$/, '');
+      if (!layers.some(l => l.id === srcId) && m.getSource(srcId) && !m.getStyle().layers.some(l => 'source' in l && l.source === srcId)) m.removeSource(srcId);
     }
+    baseIds.current = wanted;
+  }, [layers, ready]);
 
-    // Upewnijmy się, że warstwy operacyjne (siatka, promienie, trasy dronów, sensory) zawsze pozostają na wierzchu!
-    const operationalStaticLayers = [
-      'search-radius-line',
-      'search-grid-fill',
-      'search-grid-line'
-    ];
-    
-    operationalStaticLayers.forEach(id => {
-      if (m.getLayer(id)) m.moveLayer(id);
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready || !mapBounds) return;
+    const [w, s, e, n] = mapBounds;
+    if ([w, s, e, n].every(Number.isFinite) && s >= -90 && n <= 90) m.fitBounds([[w, s], [e, n]], { padding: 50, duration: 800 });
+  }, [mapBounds, ready]);
+
+  // --- tryb rysowania
+  useEffect(() => {
+    if (ready) drawRef.current?.setMode(drawMode);
+  }, [drawMode, ready]);
+
+  // --- obszary
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    setData(m, 'areas', { type: 'FeatureCollection', features: areas.map(a => ({ ...a.feature, properties: { id: a.id, active: a.id === activeAreaId } })) });
+  }, [areas, activeAreaId, ready]);
+
+  // --- ortofoto z lidaru / termowizji
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    const show = !!(result && anchor && mapLayers.ortho !== 'none' && phase !== 'scouting');
+    if (!show) {
+      if (m.getLayer('ortho-layer')) m.removeLayer('ortho-layer');
+      if (m.getSource('ortho')) m.removeSource('ortho');
+      return;
+    }
+    const b = result!.ortho.bounds;
+    const coords: [[number, number], [number, number], [number, number], [number, number]] = [ll(anchor!, b.minX, b.maxY), ll(anchor!, b.maxX, b.maxY), ll(anchor!, b.maxX, b.minY), ll(anchor!, b.minX, b.minY)];
+    const url = rasterToDataUrl(mapLayers.ortho === 'thermal' ? result!.ortho.thermal : result!.ortho.rgb);
+    const src = m.getSource('ortho') as ImageSource | undefined;
+    if (src) src.updateImage({ url, coordinates: coords });
+    else {
+      m.addSource('ortho', { type: 'image', url, coordinates: coords });
+      m.addLayer({ id: 'ortho-layer', type: 'raster', source: 'ortho', paint: { 'raster-opacity': 0.92, 'raster-resampling': 'nearest' } }, MISSION_BOTTOM);
+    }
+  }, [result, anchor, mapLayers.ortho, phase, ready]);
+
+  // --- dopasowanie widoku do wyników
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready || !result || !anchor || phase !== 'analysis') return;
+    const b = result.ortho.bounds;
+    m.fitBounds([ll(anchor, b.minX, b.minY), ll(anchor, b.maxX, b.maxY)], { padding: 40, duration: 1200, maxZoom: 19.5, pitch: m.getPitch(), bearing: m.getBearing() });
+  }, [phase, ready, result, anchor]);
+
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready || !flyToTrigger) return;
+    m.flyTo({ center: [flyToTrigger.lng, flyToTrigger.lat], zoom: flyToTrigger.zoom, duration: 1200 });
+  }, [flyToTrigger, ready]);
+
+  // --- plan / pełna trajektoria zwiadowcy
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    let coords: [number, number][] = [];
+    if (scoutTrack && anchor) coords = scoutTrack.plan.waypoints.map(w => ll(anchor, w[0], w[1]));
+    else {
+      // podgląd planu lotu nad aktywnym obszarem (przed startem)
+      const area = areas.find(a => a.id === activeAreaId);
+      if (area && phase === 'planning') {
+        const ring = area.feature.geometry.coordinates[0] as [number, number][];
+        const a0: GeoAnchor = { lat0: ring[0][1], lon0: ring[0][0], mode: 'gps' };
+        const plan = planCoverage(ring.map(([lng, lat]) => lngLatToLocal(a0, lng, lat)), { altitude: flightAltitude });
+        coords = plan.waypoints.map(w => ll(a0, w[0], w[1]));
+      }
+    }
+    setData(m, 'scout-plan', coords.length ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }] } : EMPTY);
+  }, [scoutTrack, anchor, areas, activeAreaId, phase, flightAltitude, ready]);
+
+  // --- start lotu: widok 3D nad wybranym obszarem
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready || phase !== 'scouting' || !scoutTrack || !anchor) return;
+    const w = scoutTrack.plan.waypoints;
+    const xs = w.map(p => p[0]), ys = w.map(p => p[1]);
+    const cam = m.cameraForBounds([ll(anchor, Math.min(...xs), Math.min(...ys)), ll(anchor, Math.max(...xs), Math.max(...ys))], { padding: 60 });
+    m.easeTo({ center: cam?.center, zoom: Math.min(19.5, (cam?.zoom ?? 18) - 0.2), pitch: 55, bearing: -20, duration: 1500 });
+    setPitched(true);
+  }, [phase, scoutTrack, anchor, ready]);
+
+  // --- skan 3D na mapie: dane i kolory
+  useEffect(() => {
+    const layer = scanLayer.current;
+    if (!ready) return;
+    if (!scan || !anchor) { layer.clear(); scanCount.current = -1; return; }
+    const mode = mapLayers.cloud === 'none' ? 'rgb' : mapLayers.cloud;
+    const colors = cloudColors(mode, scan.positions, scan.colors, scan.temps, ironbow);
+    if (!layer.hasData() || scanCount.current !== scan.count) layer.setData(anchor, scan.positions, colors, scan.scanTimes);
+    else layer.setColors(colors);
+    scanCount.current = scan.count;
+    layer.setRange(...sourceRange(mapLayers.cloudSource, scan.count, scan.nLidar));
+    layer.setVisible(mapLayers.cloud !== 'none');
+  }, [scan, anchor, mapLayers.cloud, mapLayers.cloudSource, ready]);
+
+  // --- postęp skanu (czas od startu lotu)
+  useEffect(() => {
+    if (!ready) return;
+    const apply = () => {
+      const ms = useMissionStore.getState();
+      const tr = ms.scoutTrack;
+      const t = tr && ms.phase === 'scouting' ? useDroneStore.getState().simTime - tr.startSim : 1e9;
+      scanLayer.current.setTime(t);
+    };
+    apply();
+    const u1 = useDroneStore.subscribe(apply);
+    const u2 = useMissionStore.subscribe(apply);
+    return () => { u1(); u2(); };
+  }, [ready]);
+
+  // --- strefy akustyczne i mapa słyszalności
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    if (!result || !anchor || phase === 'scouting') { setData(m, 'zones', EMPTY); setData(m, 'audibility', EMPTY); return; }
+    const zones: Feature[] = mapLayers.zones
+      ? result.acousticZones.map(z => circle(ll(anchor, z.position[0], z.position[1]), z.radius / 1000, { steps: 64, units: 'kilometers', properties: { kind: z.kind } }))
+      : [];
+    setData(m, 'zones', { type: 'FeatureCollection', features: zones });
+    const pts: Feature[] = mapLayers.audibility
+      ? result.acousticEvents.filter(e => e.kind !== 'broadband' || e.snrDb > 8).map(e => ({ type: 'Feature', properties: { snr: e.snrDb, kind: e.kind }, geometry: { type: 'Point', coordinates: ll(anchor, e.dronePos[0], e.dronePos[1]) } }))
+      : [];
+    setData(m, 'audibility', { type: 'FeatureCollection', features: pts });
+  }, [result, anchor, phase, mapLayers.zones, mapLayers.audibility, ready]);
+
+  // --- lądowiska i powiązania z hotspotami
+  useEffect(() => {
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    if (!anchor || !mapLayers.landing || phase === 'scouting') { setData(m, 'landing', EMPTY); setData(m, 'links', EMPTY); return; }
+    const byId = new globalThis.Map(hotspots.map(h => [h.id, h]));
+    const active = new Set(hotspots.filter(h => h.radarCandidate).map(h => h.id));
+    const sites = landingSites.filter(s => active.has(s.hotspotId));
+    const state = (id: string) => {
+      const ms = measurements.find(x => x.siteId === id);
+      return ms ? (ms.detection.detected ? 'vital' : 'none') : 'pending';
+    };
+    setData(m, 'landing', { type: 'FeatureCollection', features: sites.map(s => ({ type: 'Feature', properties: { id: s.id, state: state(s.id), method: s.method }, geometry: { type: 'Point', coordinates: ll(anchor, s.position[0], s.position[1]) } })) });
+    setData(m, 'links', {
+      type: 'FeatureCollection', features: sites.filter(s => byId.has(s.hotspotId)).map(s => {
+        const h = byId.get(s.hotspotId)!;
+        return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [ll(anchor, s.position[0], s.position[1]), ll(anchor, h.position[0], h.position[1])] } };
+      }),
     });
+  }, [landingSites, hotspots, measurements, anchor, phase, mapLayers.landing, ready]);
 
-    if (m.getStyle() && m.getStyle().layers) {
-      m.getStyle().layers.forEach(l => {
-        if (l.id.startsWith('sensor-') || l.id.startsWith('drone-path-') || l.id.startsWith('gl-draw-')) {
-          m.moveLayer(l.id);
-        }
+  // --- hotspoty (znaczniki HTML)
+  useEffect(() => {
+    const m = mapRef.current;
+    hotspotMarkers.current.forEach(mk => mk.remove());
+    hotspotMarkers.current = [];
+    if (!m || !ready || !anchor) return;
+    for (const h of hotspots) {
+      if (phase === 'scouting' && !revealed.includes(h.id)) continue;
+      const el = hotspotElement(h, h.id === selectedHotspotId);
+      el.addEventListener('click', ev => {
+        // w trybie rysowania kliknięcie ma trafić do mapy (np. punkt tuż obok hotspotu)
+        if (useMissionStore.getState().drawMode !== 'none') return;
+        ev.stopPropagation();
+        useMissionStore.getState().selectHotspot(h.id);
       });
-    }
-  };
-
-  // Sync Grid & LKP
-  const syncGrid = () => {
-    if (!map.current || !mapLoaded.current) return;
-    const m = map.current;
-
-    // 1. Update Markers
-    // Remove old ones
-    markers.current.forEach(mkr => mkr.remove());
-    markers.current = [];
-    
-    // Add new ones
-    lkps.forEach(p => {
-      const mkr = new maplibregl.Marker({ color: '#ef4444' })
-        .setLngLat(p)
+      const mk = new maplibregl.Marker({ element: el })
+        .setLngLat(ll(anchor, h.position[0], h.position[1]))
+        .setPopup(new maplibregl.Popup({ offset: 16, closeButton: true, maxWidth: '320px' }).setHTML(hotspotPopup(h)))
         .addTo(m);
-      markers.current.push(mkr);
-    });
-
-    // 2. Update Radius Okręgi (Circles)
-    if (radiusFeatures) {
-      if (!m.getSource('search-radius')) {
-        m.addSource('search-radius', { type: 'geojson', data: radiusFeatures });
-        
-        m.addLayer({
-          id: 'search-radius-line',
-          type: 'line',
-          source: 'search-radius',
-          paint: {
-            'line-color': '#ef4444',
-            'line-width': 2,
-            'line-dasharray': [2, 2],
-            'line-opacity': 0.8
-          }
-        });
-      } else {
-        (m.getSource('search-radius') as maplibregl.GeoJSONSource).setData(radiusFeatures);
-      }
-    } else {
-      if (m.getLayer('search-radius-line')) m.removeLayer('search-radius-line');
-      if (m.getSource('search-radius')) m.removeSource('search-radius');
+      if (h.id === selectedHotspotId) mk.togglePopup();
+      hotspotMarkers.current.push(mk);
     }
+  }, [hotspots, anchor, phase, selectedHotspotId, revealed, ready]);
 
-    // 3. Update Grid Layer
-    if (gridFeatures) {
-      if (!m.getSource('search-grid')) {
-        m.addSource('search-grid', { type: 'geojson', data: gridFeatures });
-        
-        // Fill layer (colored by probability)
-        m.addLayer({
-          id: 'search-grid-fill',
-          type: 'fill',
-          source: 'search-grid',
-          paint: {
-            'fill-color': [
-              'interpolate',
-              ['linear'],
-              ['get', 'probability'],
-              0, '#3b82f6', // low prob (blue)
-              1, '#ef4444'  // high prob (red)
-            ],
-            'fill-opacity': 0.3
-          }
-        });
-
-        // Line layer (borders)
-        m.addLayer({
-          id: 'search-grid-line',
-          type: 'line',
-          source: 'search-grid',
-          paint: {
-            'line-color': '#ffffff',
-            'line-width': 1,
-            'line-opacity': 0.5
-          }
-        });
-      } else {
-        (m.getSource('search-grid') as maplibregl.GeoJSONSource).setData(gridFeatures);
-      }
-    } else {
-      if (m.getLayer('search-grid-fill')) m.removeLayer('search-grid-fill');
-      if (m.getLayer('search-grid-line')) m.removeLayer('search-grid-line');
-      if (m.getSource('search-grid')) m.removeSource('search-grid');
-    }
-  };
-
-  // Sync Drones
-  const syncDrones = () => {
-    if (!map.current || !mapLoaded.current) return;
-    const m = map.current;
-
-    // Remove inactive drones
-    Object.keys(droneMarkers.current).forEach(id => {
-      if (!drones.find(d => d.id === id && d.isActive && d.telemetry)) {
-        droneMarkers.current[id].remove();
-        delete droneMarkers.current[id];
-        if (m.getLayer(`drone-path-line-${id}`)) m.removeLayer(`drone-path-line-${id}`);
-        if (m.getSource(`drone-path-${id}`)) m.removeSource(`drone-path-${id}`);
-      }
-    });
-
-    drones.forEach(drone => {
-      if (!drone.isActive || !drone.telemetry) return;
-
-      const el = document.createElement('div');
-      el.className = 'w-8 h-8 flex items-center justify-center animate-pulse';
-      const svg = drone.type === 'faza1' 
-        ? `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.2-1.1.6L3 8l6 6-4 4-3-1-1 1 3 3 1-1-1-3 4-4 6 6l1.2-.7c.4-.2.7-.6.6-1.1z"/></svg>`
-        : `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2v20"/><path d="M2 12h20"/></svg>`;
-      el.innerHTML = `<div class="bg-black/80 p-1 rounded-full border border-white/20">${svg}</div>`;
-
-      if (!droneMarkers.current[drone.id]) {
-        droneMarkers.current[drone.id] = new maplibregl.Marker({ element: el })
-          .setLngLat([drone.telemetry.lng, drone.telemetry.lat])
-          .addTo(m);
-      } else {
-        droneMarkers.current[drone.id].setLngLat([drone.telemetry.lng, drone.telemetry.lat]);
-        droneMarkers.current[drone.id].getElement().innerHTML = el.innerHTML;
-      }
-
-      // Flight Path
-      if (showPath && drone.telemetryHistory.length > 1) {
-        const geojson: GeoJSON.Feature<GeoJSON.LineString> = {
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: drone.telemetryHistory
-          }
-        };
-
-        const pathColor = drone.type === 'faza1' ? '#3b82f6' : '#22c55e'; // Blue for F1, Green for F2
-
-        if (!m.getSource(`drone-path-${drone.id}`)) {
-          m.addSource(`drone-path-${drone.id}`, { type: 'geojson', data: geojson });
-          m.addLayer({
-            id: `drone-path-line-${drone.id}`,
-            type: 'line',
-            source: `drone-path-${drone.id}`,
-            paint: {
-              'line-color': pathColor,
-              'line-width': 2,
-              'line-dasharray': [2, 1]
-            }
-          });
-        } else {
-          (m.getSource(`drone-path-${drone.id}`) as maplibregl.GeoJSONSource).setData(geojson);
-        }
-      } else {
-        if (m.getLayer(`drone-path-line-${drone.id}`)) m.removeLayer(`drone-path-line-${drone.id}`);
-        if (m.getSource(`drone-path-${drone.id}`)) m.removeSource(`drone-path-${drone.id}`);
-      }
-    });
-
-    // Cleanup and Add Heatmaps for activeSensors
-    const activeSensorIds = new Set<string>();
-    drones.forEach(drone => {
-      drone.activeSensors.forEach(sensor => {
-        const layerId = `sensor-${drone.id}-${sensor.replace(/[^a-zA-Z0-9]/g, '')}`;
-        activeSensorIds.add(layerId);
-        
-        // Filtrujemy detekcje tak, aby dotyczyły tylko TEGO drona i TEGO wybranego sensora.
-        const sensorDetections = detections.filter(d => d.droneId === drone.id && d.sensor === sensor);
-
-        // Generujemy "pokrycie terenu" (swath) na podstawie trasy drona.
-        const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
-        
-        // Próbkowanie trasy żeby nie przeciążyć przeglądarki
-        drone.telemetryHistory.forEach((pt, idx) => {
-          if (idx % 3 !== 0) return; // bierzemy co 3 punkt z historii
-
-          // Generujemy 4 punkty obok drona symulujące pole widzenia (FOV)
-          for (let i = 0; i < 4; i++) {
-            const scanLng = pt[0] + (Math.random() - 0.5) * 0.003;
-            const scanLat = pt[1] + (Math.random() - 0.5) * 0.003;
-            
-            // Domyślnie teren jest "bardzo zimny" (brak anomalii)
-            let intensity = 0.05;
-            
-            // Jeśli blisko znajduje się anomalia DLA TEGO SENSORA, drastycznie zwiększamy intensywność
-            sensorDetections.forEach(d => {
-              const dist = Math.sqrt(Math.pow(d.lng - scanLng, 2) + Math.pow(d.lat - scanLat, 2));
-              if (dist < 0.0015) {
-                const strength = 1.5 - (dist / 0.001);
-                intensity = Math.max(intensity, strength);
-              }
-            });
-
-            features.push({
-              type: 'Feature',
-              properties: { intensity },
-              geometry: { type: 'Point', coordinates: [scanLng, scanLat] }
-            });
-          }
-        });
-
-        // NAJWAŻNIEJSZE: Wstrzykujemy same detekcje bezwzględnie jako potężne punkty,
-        // żeby mieć 100% pewności, że każda anomalia tego sensora się wyrysuje nawet jak trasa obok "nie trafiła" idealnie.
-        sensorDetections.forEach(d => {
-          features.push({
-            type: 'Feature',
-            properties: { intensity: 2.0 }, // Bardzo mocny punkt centralny
-            geometry: { type: 'Point', coordinates: [d.lng, d.lat] }
-          });
-          // Dodajemy też 3 małe punkty wokół żeby powiększyć plamę
-          for(let i=0; i<3; i++) {
-            features.push({
-              type: 'Feature',
-              properties: { intensity: 1.5 },
-              geometry: { type: 'Point', coordinates: [d.lng + (Math.random() - 0.5) * 0.0005, d.lat + (Math.random() - 0.5) * 0.0005] }
-            });
-          }
-        });
-        
-        const geojson: GeoJSON.FeatureCollection<GeoJSON.Point> = { type: 'FeatureCollection', features };
-
-        if (!m.getSource(layerId)) {
-          m.addSource(layerId, { type: 'geojson', data: geojson });
-          
-          let colorRamp: any = [
-            'interpolate', ['linear'], ['heatmap-density'],
-            0, 'rgba(0,0,255,0)',
-            0.1, 'rgba(0,0,255,0.2)',
-            0.4, 'lime',
-            0.7, 'yellow',
-            1.0, 'red'
-          ];
-          
-          if (sensor.includes('GPR') || sensor.includes('SAR')) {
-            colorRamp = [
-              'interpolate', ['linear'], ['heatmap-density'],
-              0, 'rgba(128,0,128,0)',
-              0.1, 'rgba(128,0,128,0.2)',
-              0.5, 'magenta',
-              1.0, 'white'
-            ];
-          }
-
-          m.addLayer({
-            id: layerId,
-            type: 'heatmap',
-            source: layerId,
-            paint: {
-              'heatmap-weight': ['get', 'intensity'],
-              'heatmap-intensity': 1.2,
-              'heatmap-color': colorRamp,
-              'heatmap-radius': 30,
-              'heatmap-opacity': 0.6
-            }
-          }); // Usunięto 'drone-path-line-f1_d1' aby uniknąć craschu gdy trasa nie istnieje
-        } else {
-          (m.getSource(layerId) as maplibregl.GeoJSONSource).setData(geojson);
-        }
-      });
-    });
-
-    // Usuwanie odznaczonych warstw sensorów
-    const currentStyle = m.getStyle();
-    if (currentStyle && currentStyle.layers) {
-      currentStyle.layers.forEach(l => {
-        if (l.id.startsWith('sensor-') && !activeSensorIds.has(l.id)) {
-          m.removeLayer(l.id);
-          m.removeSource(l.id);
-        }
-      });
-    }
-
-    // Detection Markers
-    const currentDetIds = new Set(detections.map(d => d.id));
-    Object.keys(detectionMarkers.current).forEach(id => {
-      if (!currentDetIds.has(id)) {
-        detectionMarkers.current[id].remove();
-        delete detectionMarkers.current[id];
-      }
-    });
-
-    detections.forEach(d => {
-      let color = '#f97316'; // orange (anomaly)
-      if (d.type === 'person') color = '#ef4444'; // red
-      if (d.type === 'vehicle') color = '#3b82f6'; // blue
-      
-      if (d.status === 'confirmed') color = '#22c55e'; // green
-      if (d.status === 'rejected') color = '#6b7280'; // gray
-
-      const popupHtml = `
-        <div class="p-2 w-48 text-black" style="pointer-events: none;">
-          <h4 class="font-bold text-sm mb-1" style="color: ${color}">Wykrycie: ${d.type.toUpperCase()}</h4>
-          <p class="text-xs font-bold mb-1">Pewność: ${d.confidence}%</p>
-          ${d.imageUrl 
-            ? `<img src="${d.imageUrl}" class="w-full h-auto rounded border border-gray-300 mb-1" />` 
-            : `<div class="w-full py-4 bg-gray-100 rounded border border-gray-300 flex items-center justify-center mb-1"><span class="text-xs text-gray-500 italic">(brak zdjecia)</span></div>`
-          }
-          <p class="text-[10px] text-gray-400 mt-1">${new Date(d.timestamp).toLocaleTimeString('pl-PL')} | ${new Date(d.timestamp).toLocaleDateString('pl-PL')}</p>
-        </div>
-      `;
-
-      const popup = new maplibregl.Popup({ offset: 25, closeButton: false, closeOnClick: false })
-        .setHTML(popupHtml);
-
-      if (!detectionMarkers.current[d.id]) {
-        const mkr = new maplibregl.Marker({ color })
-          .setLngLat([d.lng, d.lat])
-          .setPopup(popup)
-          .addTo(m);
-        
-        const el = mkr.getElement();
-        el.addEventListener('mouseenter', () => mkr.togglePopup());
-        el.addEventListener('mouseleave', () => mkr.togglePopup());
-        
-        detectionMarkers.current[d.id] = mkr;
-      } else {
-        const mkr = detectionMarkers.current[d.id];
-        // Aktualizacja koloru standardowego markera maplibre
-        if ((mkr as any)._color !== color) {
-          // Aby zmienić kolor markera domyślnego w maplibre, musimy go stworzyć od nowa
-          mkr.remove();
-          const newMkr = new maplibregl.Marker({ color })
-            .setLngLat([d.lng, d.lat])
-            .setPopup(popup)
-            .addTo(m);
-          
-          const el = newMkr.getElement();
-          el.addEventListener('mouseenter', () => newMkr.togglePopup());
-          el.addEventListener('mouseleave', () => newMkr.togglePopup());
-          
-          detectionMarkers.current[d.id] = newMkr;
-        } else {
-          mkr.setLngLat([d.lng, d.lat]);
-          mkr.setPopup(popup); // Aktualizacja popupu
-        }
-      }
-    });
-  };
-
-  const syncYoloDetections = () => {
-    if (!map.current || !mapLoaded.current) return;
-    const m = map.current;
-
-    // Clear old markers
-    Object.values(yoloMarkers.current).forEach(mkr => mkr.remove());
-    yoloMarkers.current = {};
-
-    yoloDetections.forEach(detection => {
-      const el = document.createElement('div');
-      el.className = 'w-6 h-6 bg-orange-500 rounded-md border-2 border-white flex items-center justify-center shadow-lg cursor-pointer hover:scale-110 transition-transform z-50';
-      el.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>`;
-
-      const popupHtml = `
-        <div class="p-2 w-48 text-black" style="pointer-events: none;">
-          <h4 class="font-bold text-sm mb-1 text-orange-600">Wykrycie YOLO</h4>
-          <p class="text-xs text-gray-600 mb-2">${detection.timestamp.toLocaleTimeString('pl-PL')} | ${detection.timestamp.toLocaleDateString('pl-PL')}</p>
-          <img src="${detection.imageUrl}" class="w-full h-auto rounded border border-gray-300 mb-1" />
-          <p class="text-xs font-bold">Pewność: ${detection.confidence}%</p>
-        </div>
-      `;
-
-      const popup = new maplibregl.Popup({ offset: 15, closeButton: false, closeOnClick: false })
-        .setHTML(popupHtml);
-
-      const mkr = new maplibregl.Marker({ element: el })
-        .setLngLat([detection.lng, detection.lat])
-        .setPopup(popup)
+  // --- wyniki radaru
+  useEffect(() => {
+    const m = mapRef.current;
+    detectionMarkers.current.forEach(mk => mk.remove());
+    detectionMarkers.current = [];
+    if (!m || !ready) return;
+    for (const d of detections) {
+      const mk = new maplibregl.Marker({ element: detectionElement(d), anchor: 'center' })
+        .setLngLat([d.lng, d.lat])
+        .setPopup(new maplibregl.Popup({ offset: 14, maxWidth: '300px' }).setHTML(`<div class="map-popup"><div class="map-popup-title">${d.vital ? 'Oznaki życia' : 'Brak oznak życia'} · ${d.hotspotId}</div><div>${esc(d.note)}</div>${d.breathingHz ? `<div>Oddech: ${(d.breathingHz * 60).toFixed(0)}/min${d.heartHz ? `, tętno: ${(d.heartHz * 60).toFixed(0)}/min` : ''}</div>` : ''}<div class="map-popup-conf">${d.lat.toFixed(6)} N, ${d.lng.toFixed(6)} E</div></div>`))
         .addTo(m);
-
-      // Dodanie hover events żeby popup otwierał się po najechaniu myszką
-      el.addEventListener('mouseenter', () => popup.addTo(m));
-      el.addEventListener('mouseleave', () => popup.remove());
-
-      yoloMarkers.current[detection.id] = mkr;
-    });
-  };
-
-  useEffect(() => {
-    syncGrid();
-  }, [lkps, gridFeatures, radiusFeatures]);
-
-  useEffect(() => {
-    syncYoloDetections();
-  }, [yoloDetections]);
-
-  useEffect(() => {
-    syncDrones();
-  }, [drones, detections, showPath]);
-
-  useEffect(() => {
-    syncLayers();
-  }, [layers]);
-
-  // Automatyczne centrowanie mapy na LKP (przydatne do Demo)
-  useEffect(() => {
-    if (map.current && mapLoaded.current && lkps.length > 0) {
-      // Centrujemy na pierwszy punkt, jeśli nagle się pojawił (np. z przycisku Demo)
-      map.current.flyTo({
-        center: [lkps[0].lng, lkps[0].lat],
-        zoom: 15,
-        duration: 2000
-      });
+      detectionMarkers.current.push(mk);
     }
-  }, [lkps.length]); // Reaguj na zmianę ilości punktów
+  }, [detections, ready]);
 
+  // --- prawda scenariusza (tylko podgląd dla prowadzącego demo)
   useEffect(() => {
-    if (map.current && mapLoaded.current && mapBounds) {
-      try {
-        // Turf bbox returns [minX, minY, maxX, maxY]
-        const [w, s, e, n] = mapBounds;
-        // Check if bounds are valid and within -90 to 90 for latitude
-        if (isFinite(w) && isFinite(s) && isFinite(e) && isFinite(n)) {
-          if (s >= -90 && s <= 90 && n >= -90 && n <= 90) {
-            map.current.fitBounds([[w, s], [e, n]], { padding: 50, duration: 1000 });
-          } else {
-            console.warn("Współrzędne poza zakresem (prawdopodobnie układ inny niż WGS84/EPSG:4326).");
-          }
+    const m = mapRef.current;
+    if (!m || !ready) return;
+    if (!anchor || !mapLayers.victimsTruth) { setData(m, 'truth', EMPTY); return; }
+    setData(m, 'truth', { type: 'FeatureCollection', features: simVictims.map(v => ({ type: 'Feature', properties: { id: v.id }, geometry: { type: 'Point', coordinates: ll(anchor, v.position[0], v.position[1]) } })) });
+  }, [simVictims, anchor, mapLayers.victimsTruth, ready]);
+
+  // --- drony: aktualizacja imperatywna przy każdym takcie zegara (bez re-renderu komponentu)
+  useEffect(() => {
+    if (!ready) return;
+    let lastTrail = 0;
+    const apply = () => {
+      const m = mapRef.current;
+      const a = useMissionStore.getState().anchor;
+      if (!m) return;
+      const { drones } = useDroneStore.getState();
+      const seen = new Set<string>();
+      for (const d of drones) {
+        if (!a || !d.pos || (d.role === 'scout' && d.status === 'base' && d.trail.length === 0)) continue;
+        seen.add(d.id);
+        let mk = droneMarkers.current[d.id];
+        if (!mk) {
+          mk = new maplibregl.Marker({ element: droneElement(d), anchor: 'center' }).setLngLat(ll(a, d.pos[0], d.pos[1])).addTo(m);
+          droneMarkers.current[d.id] = mk;
         }
-      } catch (err) {
-        console.error("Błąd podczas fitBounds:", err);
+        mk.setLngLat(ll(a, d.pos[0], d.pos[1]));
+        const el = mk.getElement();
+        el.dataset.status = d.status;
+        el.title = `${d.name} — ${STATUS_LABEL[d.status]}, bateria ${d.battery.toFixed(0)}%`;
+        const arrow = el.querySelector('.drone-arrow') as SVGElement | null;
+        if (arrow) arrow.style.transform = `rotate(${d.heading}deg)`;
       }
-    }
-  }, [mapBounds]);
+      for (const id of Object.keys(droneMarkers.current)) if (!seen.has(id)) { droneMarkers.current[id].remove(); delete droneMarkers.current[id]; }
+      const now = performance.now();
+      if (now - lastTrail > 400) {
+        lastTrail = now;
+        const show = useMissionStore.getState().mapLayers.trails;
+        setData(m, 'trails', {
+          type: 'FeatureCollection',
+          features: !a || !show ? [] : drones.filter(d => d.trail.length > 1).map(d => ({ type: 'Feature', properties: { role: d.role }, geometry: { type: 'LineString', coordinates: d.trail.map(p => ll(a, p[0], p[1])) } })),
+        });
+      }
+    };
+    apply();
+    return useDroneStore.subscribe(apply);
+  }, [ready]);
 
   return (
-    <div className={`w-full h-full relative bg-black/10 ${isSelectingLKP ? 'cursor-crosshair' : ''}`}>
-      <div ref={mapContainer} className="w-full h-full" />
+    <div className="w-full h-full relative bg-black/10">
+      <div ref={container} className="w-full h-full" data-testid="map" />
+      <button
+        onClick={() => { const m = mapRef.current; if (!m) return; const to3d = m.getPitch() < 10; m.easeTo({ pitch: to3d ? 55 : 0, bearing: to3d ? -20 : 0, duration: 800 }); setPitched(to3d); }}
+        className="absolute top-3 right-14 bg-background/90 border border-border/60 rounded-md px-2.5 py-1.5 text-xs font-semibold hover:bg-muted shadow"
+        data-testid="toggle-3d"
+      >{pitched ? 'Widok 2D' : 'Widok 3D'}</button>
+      {drawMode !== 'none' && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-amber-500 text-black text-sm font-medium px-4 py-2 rounded-md shadow-lg pointer-events-none">
+          {drawMode === 'polygon' && 'Klikaj wierzchołki obszaru · dwuklik, Enter lub klik w pierwszy punkt kończy · Esc anuluje'}
+          {drawMode === 'rectangle' && 'Kliknij dwa przeciwległe rogi prostokąta · Esc anuluje'}
+          {drawMode === 'lkp' && 'Kliknij ostatnią znaną pozycję (LKP) — powstanie okrąg poszukiwań · Esc anuluje'}
+          {drawMode === 'manual-hotspot' && 'Kliknij miejsce do sprawdzenia radarem (np. słychać stukanie) · Esc anuluje'}
+          {drawMode === 'sim-victim' && 'Kliknij, gdzie w scenariuszu leży zasypana osoba · Esc anuluje'}
+        </div>
+      )}
     </div>
   );
 }

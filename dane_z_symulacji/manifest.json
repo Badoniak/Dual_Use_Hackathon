@@ -1,0 +1,157 @@
+{
+  "session": "session_20260929_215852",
+  "started": "2026-09-29T21:58:52",
+  "world_frame": "earth",
+  "drone_frame": "drone0/base_link",
+  "conventions": {
+    "depth_png": "uint16 PNG, 1000 counts per metre, 0 = no return",
+    "thermal_png": "uint16 PNG, 0.01 K per count (value * scale = kelvin)",
+    "point_clouds": "PCD (binary) and PLY (binary little endian), metres",
+    "audio": "WAV, PCM signed 16 bit little endian",
+    "index_csv": "one row per file: filename, stamp (s), frame_id and the pose of that frame in world_frame as position + xyzw quaternion"
+  },
+  "trajectory": "trajectory.csv",
+  "streams": [
+    {
+      "name": "hd_camera",
+      "topic": "/drone0/sensor_measurements/hd_camera/image_raw",
+      "kind": "image_rgb",
+      "directory": "hd_camera",
+      "files_written": 38,
+      "messages_skipped_by_rate_limit": 13,
+      "max_hz": 1.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "hd_camera_info",
+      "topic": "/drone0/sensor_measurements/hd_camera/camera_info",
+      "kind": "camera_info",
+      "directory": "hd_camera_info",
+      "files_written": 1,
+      "messages_skipped_by_rate_limit": 0,
+      "max_hz": 0.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "rgbd_camera_rgb",
+      "topic": "/drone0/sensor_measurements/rgbd_camera/image_raw",
+      "kind": "image_rgb",
+      "directory": "rgbd_camera_rgb",
+      "files_written": 256,
+      "messages_skipped_by_rate_limit": 2138,
+      "max_hz": 1.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "rgbd_camera_depth",
+      "topic": "/drone0/sensor_measurements/rgbd_camera/depth",
+      "kind": "image_depth",
+      "directory": "rgbd_camera_depth",
+      "files_written": 255,
+      "messages_skipped_by_rate_limit": 2098,
+      "max_hz": 1.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "rgbd_camera_info",
+      "topic": "/drone0/sensor_measurements/rgbd_camera/camera_info",
+      "kind": "camera_info",
+      "directory": "rgbd_camera_info",
+      "files_written": 1,
+      "messages_skipped_by_rate_limit": 0,
+      "max_hz": 0.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "thermal_camera",
+      "topic": "/drone0/sensor_measurements/thermal_camera/image_raw",
+      "kind": "image_thermal",
+      "directory": "thermal_camera",
+      "files_written": 424,
+      "messages_skipped_by_rate_limit": 801,
+      "max_hz": 2.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "thermal_camera_info",
+      "topic": "/drone0/sensor_measurements/thermal_camera/camera_info",
+      "kind": "camera_info",
+      "directory": "thermal_camera_info",
+      "files_written": 1,
+      "messages_skipped_by_rate_limit": 0,
+      "max_hz": 0.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "imu",
+      "topic": "/drone0/sensor_measurements/imu",
+      "kind": "imu",
+      "directory": "imu",
+      "files_written": 8631,
+      "messages_skipped_by_rate_limit": 34975,
+      "max_hz": 50.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "magnetometer",
+      "topic": "/drone0/sensor_measurements/magnetometer",
+      "kind": "magnetometer",
+      "directory": "magnetometer",
+      "files_written": 1791,
+      "messages_skipped_by_rate_limit": 3139,
+      "max_hz": 10.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "air_pressure",
+      "topic": "/drone0/sensor_measurements/air_pressure",
+      "kind": "fluid_pressure",
+      "directory": "air_pressure",
+      "files_written": 1791,
+      "messages_skipped_by_rate_limit": 3142,
+      "max_hz": 10.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "gps",
+      "topic": "/drone0/sensor_measurements/gps",
+      "kind": "navsat",
+      "directory": "gps",
+      "files_written": 1552,
+      "messages_skipped_by_rate_limit": 1002,
+      "max_hz": 10.0,
+      "in_world_frame": false
+    },
+    {
+      "name": "microphone",
+      "topic": "/drone0/sensor_measurements/microphone/audio",
+      "kind": "audio",
+      "directory": "microphone",
+      "files_written": 1,
+      "messages_skipped_by_rate_limit": 0,
+      "max_hz": 0.0,
+      "in_world_frame": false
+    }
+  ],
+  "point_cloud_map": {
+    "files": [
+      "point_cloud_map.ply",
+      "point_cloud_map.pcd"
+    ],
+    "frame": "earth",
+    "units": "metres",
+    "points": 1282590,
+    "points_ingested": 54215603,
+    "clouds_merged": 686,
+    "voxel_size_m": 0.1,
+    "colour": {
+      "from_sensor": "clouds that carry rgb (the RGBD camera) keep their own",
+      "from_camera": "lidar points projected into the colour camera; 93607 points coloured this way",
+      "fallback": "height ramp over [0.0, 12.0] m"
+    },
+    "sources": {
+      "/drone0/sensor_measurements/lidar_3d/points": 433,
+      "/drone0/sensor_measurements/rgbd_camera/points": 253
+    }
+  }
+}

@@ -22,7 +22,7 @@ export const useLogStore = create<LogStore>((set) => ({
     {
       id: 'init-1',
       timestamp: new Date(),
-      message: 'System Antigravity Command & Control v2.0 gotowy do pracy.',
+      message: 'Stacja naziemna SKYSAR gotowa. Wyznacz obszar działań i wyślij zwiadowcę.',
       type: 'info',
       source: 'SYSTEM'
     }
@@ -37,8 +37,8 @@ export const useLogStore = create<LogStore>((set) => ({
         type,
         source
       };
-      // Przechowujemy tylko ostatnie 50 logów by nie zaśmiecać pamięci
-      return { logs: [newLog, ...state.logs].slice(0, 50) };
+      // dziennik misji: ostatnie 300 wpisów
+      return { logs: [newLog, ...state.logs].slice(0, 300) };
     });
   },
 
@@ -53,7 +53,7 @@ export const useLogStore = create<LogStore>((set) => ({
         imageUrl,
         confidence
       };
-      return { logs: [newLog, ...state.logs].slice(0, 50) };
+      return { logs: [newLog, ...state.logs].slice(0, 300) };
     });
   },
   

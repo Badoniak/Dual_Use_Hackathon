@@ -31,7 +31,7 @@ export const useMapStore = create<MapState>((set) => ({
       type: 'raster',
       visible: true,
       opacity: 1,
-      url: 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
     },
     {
       id: 'orto-gugik',

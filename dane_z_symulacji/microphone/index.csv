@@ -1,0 +1,2 @@
+filename,stamp,frame_id,pos_x,pos_y,pos_z,quat_x,quat_y,quat_z,quat_w
+microphone.wav,6.500000000,drone0/base_link,,,,,,,

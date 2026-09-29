@@ -130,6 +130,41 @@ Ze względu na ograniczenia czasowe hackathonu, prezentujemy **działający prot
    * Odporność na szum środowiskowy i ruchy ratowników wokół.
 4. **Interfejs Ratownika (Dashboard GUI):** Wizualizacja offline w czasie rzeczywistym z możliwością zatwierdzania trafień i eksportem do formatu `GeoJSON`/`KML`.
 
+### Uruchomienie stacji naziemnej (aplikacja web)
+
+Dane z symulacji Gazebo (sesja rejestratora z `manifest.json`) leżą w `dane_z_symulacji/` i są serwowane przez Vite pod `/sim-data/` (inny katalog: zmienna `SIM_DATA_DIR`).
+
+```bash
+npm install
+npm run dev          # http://localhost:5173
+npm test             # testy jednostkowe algorytmów na prawdziwych danych z symulacji (vitest)
+APP_URL=http://localhost:5173/ npm run test:e2e   # pełny przepływ misji w Chrome headless
+```
+
+Przepływ: **Misja** → wyznacz obszar (wielokąt / prostokąt / LKP + promień albo „miejsce zdarzenia z symulacji”) i wysokość lotu → *Wyślij zwiadowcę* → dron leci nad **wybrany obszar** trasą pokrycia („kosiarka”, pas termowizji wg wysokości), a skan 3D (chmura punktów) narasta na mapie tam, gdzie dron już przeleciał → **Hot spoty**: potencjalne miejsca osób, każde z dwiema składowymi — termowizja (anomalia cieplna na mapie 3D) i mikrofon (dźwięk narastający przy zbliżaniu się drona) → *Wyślij radary*: lądowanie jak najbliżej hot spotu, na stromym gruzie sonda na lince (wariant T) → **Wykrycia**: osoba, pozycja 3D, przedział głębokości → zatwierdzenie przez ratownika i eksport GeoJSON/KML. Zakładka **Scenariusz** steruje syntetycznym radarem fazy 2 (tłumienie gruzu, εr, zasypane osoby).
+
+Dane czujników pochodzą z jednej sesji Gazebo; przy obszarze w innym miejscu scena jest zakotwiczona w środku narysowanego obszaru (dla obszaru obejmującego prawdziwe miejsce — georeferencja z GPS drona).
+
+| Moduł | Co robi |
+|---|---|
+| `src/sim/flightPlan.ts` | trasa pokrycia wielokąta, szerokość pasa z pola widzenia termowizji (60°), czas zeskanowania każdego fragmentu terenu |
+| `src/sim/rgbd.ts` | rozdzielenie czujników: chmura kamery RGB-D odtwarzana z map głębi + klatek RGB (woksel 5 cm), punkty lidaru rozpoznawane po kolorze zapasowym (rampa wysokości) — na mapie i w podglądzie 3D można pokazać lidar, RGB-D albo oba |
+| `src/sim/thermal.ts` | rzutuje piksele termowizji promieniami na mapę wokselową z lidaru → tekstura temperatur i klastry ciepła |
+| `src/sim/acoustic.ts` | STFT mikrofonu, usunięcie linii wirników, detekcja tonu / głosu / stuków, zgrubna lokalizacja (model 1/r) |
+| `src/sim/fusion.ts` | hot spot = termowizja + mikrofon (korelacja głośności z bliskością drona), poziom ufności i uzasadnienie |
+| `src/sim/landing.ts` | punkty pomiaru: lądowiska (nachylenie < 15°, płaskie ≥ 1,25 m) najpierw do 2,5 m, potem sonda na lince do 2 m, dalej do 5 m |
+| `src/sim/radar.ts`, `radarFusion.ts`, `multilateration.ts` | syntetyczny SFCW (budżet łącza B = 81,5 dB, zasięg ~3 m przy 10 dB/m), detektor oddechu/tętna, grupowanie detekcji w osoby, pozycja 3D z nieznaną εr |
+| `src/features/map/scanLayer.ts` | chmura punktów 3D na mapie (warstwa MapLibre + three.js), odsłaniana w trakcie lotu |
+| `src/engine/engine.ts` | zegar misji i drony (start → przelot → lądowanie / sonda → pomiar → powrót / wymiana baterii) |
+
+---|---|
+| `src/sim/thermal.ts` | rzutuje piksele termowizji promieniami na mapę wokselową z lidaru → tekstura temperatur i klastry 37 °C / ogień |
+| `src/sim/acoustic.ts` | STFT mikrofonu, usunięcie linii wirników, detekcja tonu / głosu / trzasków, zgrubna lokalizacja (model 1/r) |
+| `src/sim/fusion.ts` | hot spoty z poziomem ufności i uzasadnieniem, strefa bazy, ogień jako zagrożenie |
+| `src/sim/landing.ts` | lądowiska: nachylenie < 15°, płaskie ≥ 1,25 m, bez przeszkód dla śmigieł, 1–5 m od hot spotu |
+| `src/sim/radar.ts`, `radarFusion.ts`, `multilateration.ts` | syntetyczny SFCW (budżet łącza B = 81,5 dB), detektor oddechu/tętna, grupowanie detekcji w osoby, pozycja 3D z nieznaną εr |
+| `src/engine/engine.ts` | zegar misji i drony (start → przelot → lądowanie → pomiar → powrót / wymiana baterii) |
+
 ---
 
 ## 📚 Źródła i Bibliografia
