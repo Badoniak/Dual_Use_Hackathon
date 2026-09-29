@@ -21,7 +21,7 @@ Podczas katastrof budowlanych (wybuchy gazu, trzęsienia ziemi) oraz schodzenia 
 Nasz system dzieli misję na dwie uzupełniające się fazy:
 
 1. **Faza 1 (Szybki Zwiad Air-to-Ground):** Szybkie drony zwiadowcze (Lidar, RGB, Termowizja, detektory IMSI/telefonów) mapują teren w kilka minut. Tworzą **cyfrowego bliźniaka 3D**, typują potencjalne miejsca przebywania poszkodowanych (*hot spoty*) oraz bezpieczne miejsca lądowania.
-2. **Faza 2 (Precyzyjny Pomiar Point-to-Point):** Ciche drony pomiarowe **lądują bezpośrednio na gruzie** (lub opuszczają sondę na lince), wyłączają silniki i wykonują pomiar radarem SFCW (*Stepped-Frequency Continuous Wave*). Brak drgań od śmigieł eliminuje szumy, umożliwiając detekcję mikroruchów klatki piersiowej (oddechu) i tętna przez **1,5–3 metry gruzu**.
+2. **Faza 2 (Precyzyjny Pomiar Point-to-Point):** Drony pomiarowe **lądują bezpośrednio na gruzie** (lub opuszczają sondę na lince), wyłączają silniki i wykonują pomiar radarem SFCW (*Stepped-Frequency Continuous Wave*). Brak drgań od śmigieł eliminuje szumy, umożliwiając detekcję mikroruchów klatki piersiowej (oddechu) i tętna przez **1,5–3 metry gruzu**.
 
 ---
 
