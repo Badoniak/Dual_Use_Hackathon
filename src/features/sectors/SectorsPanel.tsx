@@ -1,9 +1,13 @@
 import React from 'react';
-import { Crosshair, MapPin, Settings2, Trash2 } from 'lucide-react';
+import { Crosshair, MapPin, Settings2, Trash2, PenTool } from 'lucide-react';
 import { useMissionStore } from '../../store/useMissionStore';
 
 export function SectorsPanel() {
-  const { lkps, isSelectingLKP, config, setSelectingLKP, updateConfig, clearSectors, updateLKP, removeLKP, gridFeatures } = useMissionStore();
+  const { 
+    lkps, isSelectingLKP, config, setSelectingLKP, updateConfig, clearSectors, 
+    updateLKP, removeLKP, gridFeatures,
+    isDrawingPolygon, setDrawingPolygon, customAreas
+  } = useMissionStore();
 
   return (
     <div className="flex flex-col h-full bg-card/50 text-foreground overflow-y-auto p-4 space-y-6">
@@ -45,14 +49,18 @@ export function SectorsPanel() {
                 </div>
                 <div className="pt-2">
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-muted-foreground">Promień poszukiwań:</span>
-                    <span className="font-medium">{p.radiusKm} km</span>
+                    <span className="text-muted-foreground">Obszar poszukiwań:</span>
+                    <span className="font-medium">{Math.round(Math.PI * p.radiusKm * p.radiusKm * 100)} ha</span>
                   </div>
                   <input 
                     type="range" 
-                    min="0.5" max="10" step="0.5" 
-                    value={p.radiusKm}
-                    onChange={(e) => updateLKP(p.id, parseFloat(e.target.value))}
+                    min="1" max="10000" step="1" 
+                    value={Math.round(Math.PI * p.radiusKm * p.radiusKm * 100)}
+                    onChange={(e) => {
+                      const ha = parseFloat(e.target.value);
+                      const r = Math.sqrt(ha / (Math.PI * 100));
+                      updateLKP(p.id, r);
+                    }}
                     className="w-full accent-primary"
                   />
                 </div>
@@ -87,6 +95,27 @@ export function SectorsPanel() {
             </button>
           </div>
         )}
+        
+        {/* Przycisk rysowania Custom Areas */}
+        <div className="pt-2 mt-2 border-t border-border/40">
+          <button
+            onClick={() => setDrawingPolygon(!isDrawingPolygon)}
+            className={`w-full py-2 rounded flex items-center justify-center gap-2 text-sm font-medium transition-colors ${
+              isDrawingPolygon 
+              ? 'bg-primary text-primary-foreground animate-pulse' 
+              : 'bg-secondary hover:bg-secondary/80 text-foreground'
+            }`}
+          >
+            <PenTool className="h-4 w-4" />
+            {isDrawingPolygon ? 'Rysuj na mapie (klikaj aby dodać punkty)...' : 'Narysuj własny obszar wielokątny'}
+          </button>
+          
+          {customAreas.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-2 text-center">
+              Liczba narysowanych obszarów: {customAreas.length}
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Configuration Section */}
@@ -104,7 +133,7 @@ export function SectorsPanel() {
             </div>
             <input 
               type="range" 
-              min="0.1" max="1" step="0.1" 
+              min="0.01" max="1" step="0.01" 
               value={config.sectorSizeKm}
               onChange={(e) => updateConfig({ sectorSizeKm: parseFloat(e.target.value) })}
               className="w-full accent-primary"
@@ -125,7 +154,7 @@ export function SectorsPanel() {
             <div className="bg-background/50 p-2 rounded border border-border/30">
               <span className="block text-muted-foreground text-xs">Pow. całkowita</span>
               <span className="font-bold">
-                {Math.round(gridFeatures.features.length * (config.sectorSizeKm * config.sectorSizeKm))} km²
+                {Math.round(gridFeatures.features.length * (config.sectorSizeKm * config.sectorSizeKm * 100))} ha
               </span>
             </div>
           </div>

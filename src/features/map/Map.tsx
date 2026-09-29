@@ -4,6 +4,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { useMapStore } from '../../store/useMapStore';
 import { useMissionStore } from '../../store/useMissionStore';
 import { useDroneStore } from '../../store/useDroneStore';
+import MapboxDraw from '@mapbox/mapbox-gl-draw';
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 
 export function Map() {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -11,10 +13,23 @@ export function Map() {
   const markers = useRef<maplibregl.Marker[]>([]);
   const droneMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
   const detectionMarkers = useRef<{[id: string]: maplibregl.Marker}>({});
+  const draw = useRef<MapboxDraw | null>(null);
   const { layers, mapBounds } = useMapStore();
-  const { lkps, isSelectingLKP, addLKP, gridFeatures, radiusFeatures } = useMissionStore();
+  const { lkps, isSelectingLKP, addLKP, gridFeatures, radiusFeatures, setCustomAreas, isDrawingPolygon, setDrawingPolygon } = useMissionStore();
   const { drones, detections, showPath } = useDroneStore();
   const mapLoaded = useRef(false);
+
+  useEffect(() => {
+    if (draw.current) {
+      if (isDrawingPolygon) {
+        draw.current.changeMode('draw_polygon');
+      } else {
+        try {
+          draw.current.changeMode('simple_select');
+        } catch (e) {}
+      }
+    }
+  }, [isDrawingPolygon]);
 
   // Initialize Map
   useEffect(() => {
@@ -43,6 +58,27 @@ export function Map() {
       zoom: 12
     });
 
+    draw.current = new MapboxDraw({
+      displayControlsDefault: false,
+      controls: {} // Ukrywamy natywne kontrolki Mapbox, użyjemy własnego przycisku w panelu
+    });
+    map.current.addControl(draw.current, 'top-left');
+
+    const updateAreas = () => {
+      if (draw.current) {
+        const data = draw.current.getAll();
+        setCustomAreas(data.features);
+      }
+    };
+
+    const stopDrawing = () => {
+      updateAreas();
+      setDrawingPolygon(false);
+    };
+
+    map.current.on('draw.create', stopDrawing);
+    map.current.on('draw.delete', updateAreas);
+    map.current.on('draw.update', updateAreas);
     const clickHandler = (e: maplibregl.MapMouseEvent) => {
       if (useMissionStore.getState().isSelectingLKP) {
         useMissionStore.getState().addLKP(e.lngLat.lng, e.lngLat.lat);

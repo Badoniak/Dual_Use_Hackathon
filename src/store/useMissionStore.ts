@@ -18,11 +18,15 @@ interface MissionState {
   config: SectorConfig;
   gridFeatures: any | null; 
   radiusFeatures: any | null; 
+  customAreas: any[];
+  isDrawingPolygon: boolean;
   
   setSelectingLKP: (val: boolean) => void;
+  setDrawingPolygon: (val: boolean) => void;
   addLKP: (lng: number, lat: number) => void;
   updateLKP: (id: string, radiusKm: number) => void;
   removeLKP: (id: string) => void;
+  setCustomAreas: (features: any[]) => void;
   updateConfig: (config: Partial<SectorConfig>) => void;
   generateGrid: () => void;
   clearSectors: () => void;
@@ -36,8 +40,11 @@ export const useMissionStore = create<MissionState>((set, get) => ({
   },
   gridFeatures: null,
   radiusFeatures: null,
+  customAreas: [],
+  isDrawingPolygon: false,
 
   setSelectingLKP: (val) => set({ isSelectingLKP: val }),
+  setDrawingPolygon: (val) => set({ isDrawingPolygon: val }),
   
   addLKP: (lng, lat) => {
     const newLKP: LKPPoint = {
@@ -67,16 +74,21 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     get().generateGrid();
   },
 
+  setCustomAreas: (features) => {
+    set({ customAreas: features });
+    if (get().lkps.length > 0 || features.length > 0) get().generateGrid();
+  },
+
   updateConfig: (config) => {
     set((state) => ({ config: { ...state.config, ...config } }));
-    if (get().lkps.length > 0) {
+    if (get().lkps.length > 0 || get().customAreas.length > 0) {
       get().generateGrid();
     }
   },
 
   generateGrid: () => {
-    const { lkps, config } = get();
-    if (lkps.length === 0) {
+    const { lkps, config, customAreas } = get();
+    if (lkps.length === 0 && customAreas.length === 0) {
       set({ gridFeatures: null, radiusFeatures: null });
       return;
     }
@@ -88,7 +100,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     });
     
     // FeatureCollection ze wszystkich buforów (do rysowania na mapie)
-    const radiusCollection = turf.featureCollection(buffers);
+    const radiusCollection = turf.featureCollection([...buffers, ...customAreas]);
     const bbox = turf.bbox(radiusCollection);
 
     // 2. Generuj siatkę (Grid) obejmującą wszystkie punkty
@@ -120,6 +132,16 @@ export const useMissionStore = create<MissionState>((set, get) => ({
         }
       });
       
+      // Sprawdzamy czy środek kwadratu leży w jakimkolwiek narysowanym Custom Area
+      customAreas.forEach(area => {
+        if (turf.booleanPointInPolygon(centroid, area)) {
+          isInsideAnyRadius = true;
+          if (0.8 > maxProbForCell) {
+            maxProbForCell = 0.8; // Stałe, wysokie prawd. dla narysowanego obszaru
+          }
+        }
+      });
+      
       if (isInsideAnyRadius) {
         feature.properties = {
           id: `S-${finalGridFeatures.length + 1}`,
@@ -135,5 +157,5 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set({ gridFeatures: grid, radiusFeatures: radiusCollection });
   },
 
-  clearSectors: () => set({ lkps: [], gridFeatures: null, radiusFeatures: null })
+  clearSectors: () => set({ lkps: [], customAreas: [], gridFeatures: null, radiusFeatures: null })
 }));

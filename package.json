@@ -10,10 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.2",
     "@tmcw/togeojson": "^7.1.2",
     "@turf/bbox": "^7.4.0",
     "@turf/helpers": "^7.4.0",
     "@turf/turf": "^7.4.0",
+    "@types/mapbox__mapbox-gl-draw": "^1.4.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "geotiff": "^3.0.5",
