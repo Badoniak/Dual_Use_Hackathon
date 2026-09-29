@@ -21,7 +21,7 @@ Podczas katastrof budowlanych (wybuchy gazu, trzęsienia ziemi) oraz schodzenia 
 Nasz system dzieli misję na dwie uzupełniające się fazy:
 
 1. **Faza 1 (Szybki Zwiad Air-to-Ground):** Szybkie drony zwiadowcze (Lidar, RGB, Termowizja, detektory IMSI/telefonów) mapują teren w kilka minut. Tworzą **cyfrowego bliźniaka 3D**, typują potencjalne miejsca przebywania poszkodowanych (*hot spoty*) oraz bezpieczne miejsca lądowania.
-2. **Faza 2 (Precyzyjny Pomiar Point-to-Point):** Ciche drony pomiarowe **lądują bezpośrednio na gruzie** (lub opuszczają sondę na lince), wyłączają silniki i wykonują pomiar radarem SFCW (*Stepped-Frequency Continuous Wave*). Brak drgań od śmigieł eliminuje szumy, umożliwiając detekcję mikroruchów klatki piersiowej (oddechu) i tętna przez **1,5–3 metry gruzu**.
+2. **Faza 2 (Precyzyjny Pomiar Point-to-Point):** Drony pomiarowe **lądują bezpośrednio na gruzie** (lub opuszczają sondę na lince), wyłączają silniki i wykonują pomiar radarem SFCW (*Stepped-Frequency Continuous Wave*). Brak drgań od śmigieł eliminuje szumy, umożliwiając detekcję mikroruchów klatki piersiowej (oddechu) i tętna przez **1,5–3 metry gruzu**.
 
 ---
 
@@ -134,9 +134,10 @@ Ze względu na ograniczenia czasowe hackathonu, prezentujemy **działający prot
 
 ## 📚 Źródła i Bibliografia
 
-1. **NASA Spinoff:** *FINDER (Finding Individuals for Disaster and Emergency Response)* – wykorzystanie radaru do detekcji biologicznej pod gruzem.
-2. **Grathwohl et al. (Uniwersytet w Ulm, 2021):** *Detection of Avalanche Victims using an Airborne GPR-SAR*.
-3. **Rong et al.:** *Non-Contact Vital Signs Detection with UAV-Borne Radars*.
-4. **NIST:** *Building Materials Attenuation and Dielectric Properties at Microwave Frequencies*.
-5. **UKE / Baza LoPRA:** *Rozporządzenie Ministra Cyfryzacji ws. urządzeń radiowych nadających bez pozwolenia (GPR/WPR EN 302 066)*.
-6. **EASA / ULC:** *Regulacje dotyczące kategorii szczególnej (SORA) oraz rejestracji operatorów UAV*.
+1. **NASA Spinoff: FINDER** – [Finding Individuals for Disaster and Emergency Response](https://spinoff.nasa.gov/spinoff/spinoff_site/2015_FINDER.html)
+2. **Grathwohl et al. (Uniwersytet w Ulm, 2021)** – [*Detection of Avalanche Victims using an Airborne GPR-SAR*](https://ieeexplore.ieee.org/document/9546252)
+3. **Rong et al.** – [*Non-Contact Vital Signs Detection with UAV-Borne Radars*](https://www.mdpi.com/1424-8220/21/18/6034)
+4. **NIST (National Institute of Standards and Technology)** – [*Building Materials Attenuation and Dielectric Properties at Microwave Frequencies*](https://www.nist.gov/publications/electromagnetic-properties-building-materials-30-mhz-10-ghz)
+5. **UKE / Akty Prawne PL** – [*Rozporządzenie ws. urządzeń radiowych nadających bez pozwolenia (GPR/WPR EN 302 066)*](https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20220002446)
+6. **EASA / ULC** – [*Wytyczne dla lotów UAV w kategorii szczególnej (SORA / NSTS)*](https://www.ulc.gov.pl/pl/drony)
+7. **Centum RT** – [*Lifeseeker Airborne SAR System for Mobile Phone Search*](https://centum-rt.com/lifeseeker/)
