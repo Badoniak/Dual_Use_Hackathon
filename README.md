@@ -134,9 +134,10 @@ Ze względu na ograniczenia czasowe hackathonu, prezentujemy **działający prot
 
 ## 📚 Źródła i Bibliografia
 
-1. **NASA Spinoff:** *FINDER (Finding Individuals for Disaster and Emergency Response)* – wykorzystanie radaru do detekcji biologicznej pod gruzem.
-2. **Grathwohl et al. (Uniwersytet w Ulm, 2021):** *Detection of Avalanche Victims using an Airborne GPR-SAR*.
-3. **Rong et al.:** *Non-Contact Vital Signs Detection with UAV-Borne Radars*.
-4. **NIST:** *Building Materials Attenuation and Dielectric Properties at Microwave Frequencies*.
-5. **UKE / Baza LoPRA:** *Rozporządzenie Ministra Cyfryzacji ws. urządzeń radiowych nadających bez pozwolenia (GPR/WPR EN 302 066)*.
-6. **EASA / ULC:** *Regulacje dotyczące kategorii szczególnej (SORA) oraz rejestracji operatorów UAV*.
+1. **NASA Spinoff: FINDER** – [Finding Individuals for Disaster and Emergency Response](https://spinoff.nasa.gov/spinoff/spinoff_site/2015_FINDER.html)
+2. **Grathwohl et al. (Uniwersytet w Ulm, 2021)** – [*Detection of Avalanche Victims using an Airborne GPR-SAR*](https://ieeexplore.ieee.org/document/9546252)
+3. **Rong et al.** – [*Non-Contact Vital Signs Detection with UAV-Borne Radars*](https://www.mdpi.com/1424-8220/21/18/6034)
+4. **NIST (National Institute of Standards and Technology)** – [*Building Materials Attenuation and Dielectric Properties at Microwave Frequencies*](https://www.nist.gov/publications/electromagnetic-properties-building-materials-30-mhz-10-ghz)
+5. **UKE / Akty Prawne PL** – [*Rozporządzenie ws. urządzeń radiowych nadających bez pozwolenia (GPR/WPR EN 302 066)*](https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20220002446)
+6. **EASA / ULC** – [*Wytyczne dla lotów UAV w kategorii szczególnej (SORA / NSTS)*](https://www.ulc.gov.pl/pl/drony)
+7. **Centum RT** – [*Lifeseeker Airborne SAR System for Mobile Phone Search*](https://centum-rt.com/lifeseeker/)
