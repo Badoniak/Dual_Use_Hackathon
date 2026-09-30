@@ -1,0 +1,113 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+    Tree Height: 600
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 5
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15
+      Show Names: false
+      Show Axes: true
+      Marker Scale: 1
+      Update Interval: 0
+    - Class: rviz_default_plugins/Image
+      Name: HD camera (RGB)
+      Enabled: true
+      Normalize Range: true
+      Topic:
+        Value: /drone0/sensor_measurements/hd_camera/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Name: RGBD camera (RGB)
+      Enabled: true
+      Normalize Range: true
+      Topic:
+        Value: /drone0/sensor_measurements/rgbd_camera/image_raw
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/Image
+      Name: RGBD camera (depth)
+      Enabled: true
+      Normalize Range: false
+      Min Value: 0
+      Max Value: 10
+      Topic:
+        Value: /drone0/sensor_measurements/rgbd_camera/depth
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Lidar 3D (accumulated map)
+      Enabled: true
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: AxisColor
+      Axis: Z
+      Use Fixed Frame: true
+      Decay Time: 60
+      Topic:
+        Value: /drone0/sensor_measurements/lidar_3d/points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+    - Class: rviz_default_plugins/PointCloud2
+      Name: RGBD camera (points)
+      Enabled: true
+      Decay Time: 0
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: RGB8
+      Topic:
+        Value: /drone0/sensor_measurements/rgbd_camera/points
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+  Global Options:
+    Fixed Frame: earth
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 25
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.6
+      Yaw: 0.8
+      Target Frame: drone0/base_link
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1500

@@ -1,0 +1,40 @@
+# Virtual sound sources for microphone_node (disaster_site world).
+#
+# Positions are in the `earth` frame, metres. They are deliberately co-located with the
+# heat sources in worlds/disaster_site.sdf.jinja, so the thermal camera and the microphone
+# point at the same targets and a downstream algorithm can fuse the two.
+#
+# type: voice   - harmonic bursts, stands in for a person calling out
+#       tone    - gated sine, stands in for an alarm or a phone ringing
+#       crackle - broadband noise, stands in for fire or settling rubble
+# amplitude is the level at `reference_distance` (1 m by default); falloff is 1/r.
+
+sources:
+  - name: survivor_fire_station
+    type: voice
+    xyz: [23.0, 3.5, 1.0]
+    amplitude: 0.85
+    f0: 190.0      # higher pitched call
+    period: 5.0    # shouts every 5 s
+    duration: 1.1
+
+  - name: survivor_industrial
+    type: voice
+    xyz: [-24.0, -2.5, 1.0]
+    amplitude: 0.7
+    f0: 145.0      # lower pitched call
+    period: 7.0
+    duration: 0.8
+
+  - name: phone_alarm
+    type: tone
+    xyz: [-26.5, 4.0, 0.6]
+    amplitude: 0.35
+    f0: 1100.0
+    period: 3.0
+    duration: 0.6
+
+  - name: smouldering_fire
+    type: crackle
+    xyz: [26.0, -5.0, 0.5]
+    amplitude: 0.30

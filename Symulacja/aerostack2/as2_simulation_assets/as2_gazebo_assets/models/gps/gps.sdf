@@ -1,0 +1,92 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+    <model name='gps'>
+        <plugin
+            filename="ignition-gazebo-navsat-system"
+            name="ignition::gazebo::systems::NavSat">
+        </plugin>
+
+        <link name='gps'>
+            <inertial>
+                <pose>0 0 0 0 -0 0</pose>
+                <mass>0.01</mass>
+                <inertia>
+                    <ixx>2.1733e-06</ixx>
+                    <ixy>0</ixy>
+                    <ixz>0</ixz>
+                    <iyy>2.1733e-06</iyy>
+                    <iyz>0</iyz>
+                    <izz>1.8e-07</izz>
+                </inertia>
+            </inertial>
+            <visual name='visual'>
+                <geometry>
+                    <cylinder>
+                        <radius>0.01</radius>
+                        <length>0.002</length>
+                    </cylinder>
+                </geometry>
+                <material>
+                    <diffuse>0 0 0 1</diffuse>
+                </material>
+            </visual>
+            <sensor name='navsat' type='navsat'>
+                <always_on>1</always_on>
+                <update_rate>10</update_rate>
+                <visualize>true</visualize>
+                <!-- <topic>gps</topic> -->
+
+                <!-- Without this the fix is exact, which no real receiver is. Figures are
+                     typical for an uncorrected consumer L1 receiver with a clear sky view:
+                     ~1.5 m horizontal, ~3 m vertical. The lat/lon themselves are real, derived
+                     from the <spherical_coordinates> origin declared by the world.
+                     Careful with the horizontal figure: Fortress adds this noise straight onto
+                     the latitude and longitude in DEGREES, not in metres (measured: stddev 1.5
+                     produced a 1.5 degree scatter, roughly 170 km). 1.35e-05 deg is ~1.5 m of
+                     latitude. Vertical and velocity noise really are in metres and m/s. -->
+                <navsat>
+                    <position_sensing>
+                        <horizontal>
+                            <noise type='gaussian'>
+                                <mean>0</mean>
+                                <stddev>1.35e-05</stddev>
+                            </noise>
+                        </horizontal>
+                        <vertical>
+                            <noise type='gaussian'>
+                                <mean>0</mean>
+                                <stddev>3.0</stddev>
+                            </noise>
+                        </vertical>
+                    </position_sensing>
+                    <velocity_sensing>
+                        <horizontal>
+                            <noise type='gaussian'>
+                                <mean>0</mean>
+                                <stddev>0.1</stddev>
+                            </noise>
+                        </horizontal>
+                        <vertical>
+                            <noise type='gaussian'>
+                                <mean>0</mean>
+                                <stddev>0.2</stddev>
+                            </noise>
+                        </vertical>
+                    </velocity_sensing>
+                </navsat>
+
+                <!-- Gazebo classic -->
+                <!-- <plugin name='gps_plugin' filename='libgazebo_gps_plugin.so'>
+                    <robotNamespace/>
+                    <gpsNoise>1</gpsNoise>
+                    <gpsXYRandomWalk>2.0</gpsXYRandomWalk>
+                    <gpsZRandomWalk>4.0</gpsZRandomWalk>
+                    <gpsXYNoiseDensity>0.0002</gpsXYNoiseDensity>
+                    <gpsZNoiseDensity>0.0004</gpsZNoiseDensity>
+                    <gpsVXYNoiseDensity>0.2</gpsVXYNoiseDensity>
+                    <gpsVZNoiseDensity>0.4</gpsVZNoiseDensity>
+                </plugin> -->
+            </sensor>
+        </link>
+    </model>
+</sdf>

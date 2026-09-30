@@ -1,0 +1,100 @@
+{% if sensor.model == 'gimbal_speed' or sensor.model == 'gimbal_position' -%}
+
+    <model name='{{ sensor.sensor_attached }}'>
+
+{% else -%}
+
+    <model name='{{ sensor.name }}'>
+    <pose
+        relative_to="base_link">
+        {{ sensor.pose }}
+    </pose>
+
+{% endif -%}
+
+    <link name="thermal_camera">
+        <inertial>
+            <mass>0.005</mass>
+            <inertia>
+                <ixx>8.33e-06</ixx>
+                <ixy>0</ixy>
+                <ixz>0</ixz>
+                <iyy>8.33e-06</iyy>
+                <iyz>0</iyz>
+                <izz>8.33e-06</izz>
+            </inertia>
+        </inertial>
+        <sensor name="thermal_camera" type="thermal">
+            <always_on>1</always_on>
+            <!-- 5 Hz: the recorder only keeps a couple of frames a second, and every extra
+                 render competes with the lidar and the two colour cameras for the GPU. -->
+            <update_rate>5</update_rate>
+            <camera name="thermal_camera">
+                <horizontal_fov>1.0472</horizontal_fov>
+                <lens>
+                    <intrinsics>
+                        <!-- fx = fy = width / ( 2 * tan (hfov / 2 ) ) -->
+                        <fx>554.3</fx>
+                        <fy>554.3</fy>
+                        <!-- cx = ( width + 1 ) / 2 -->
+                        <cx>320.5</cx>
+                        <!-- cy = ( height + 1 ) / 2 -->
+                        <cy>256.5</cy>
+                        <s>0</s>
+                    </intrinsics>
+                </lens>
+                <image>
+                    <!-- L16: each pixel is temperature in Kelvin / resolution (see plugin) -->
+                    <width>640</width>
+                    <height>512</height>
+                    <format>L16</format>
+                </image>
+                <clip>
+                    <near>0.1</near>
+                    <far>300</far>
+                </clip>
+                <!-- Do NOT add a <noise> block here. Fortress has no image-noise model for
+                     the thermal sensor: it logs "Image noise requested, please use
+                     ImageNoiseFactory::NoiseModel instead" from Noise.cc and then the server
+                     dies with SIGSEGV. Measured, not guessed. The thermal channel is therefore
+                     noise-free; the colour cameras, lidar, GPS and microphone all carry noise.
+-->
+
+                {% if sensor.model == 'gimbal_speed' or sensor.model == 'gimbal_position' -%}
+
+                    <optical_frame_id>/{{ namespace }}/{{ sensor.name }}/_0/_1/_2/{{ sensor.sensor_attached }}/{{ sensor.sensor_attached_type }}/optical_frame</optical_frame_id>
+
+                {% else -%}
+
+                    <optical_frame_id>/{{ namespace }}/{{ sensor.name }}/{{ sensor.model }}/optical_frame</optical_frame_id>
+
+                {% endif -%}
+
+                </camera>
+            <plugin
+                filename="ignition-gazebo-thermal-sensor-system"
+                name="ignition::gazebo::systems::ThermalSensor">
+                <!-- 0.01 K per count, so a pixel value of 31015 is 310.15 K (37 C).
+                     max_temp must stay under 65535 * resolution = 655.35 K, otherwise the
+                     16 bit pixel wraps around and hot objects read as cold.
+                     Objects get their temperature from the Thermal system plugin on their
+                     visuals; anything without one is rendered near the ambient temperature. -->
+                <min_temp>253.15</min_temp>
+                <max_temp>650.0</max_temp>
+                <resolution>0.01</resolution>
+            </plugin>
+            </sensor>
+        </link>
+
+    <frame name="mount_point"/>
+</model>
+
+{% if sensor.model != 'gimbal_speed' and sensor.model != 'gimbal_position' -%}
+
+<joint
+    name="{{ sensor.name }}_joint" type="fixed">
+    <parent>base_link</parent>
+    <child>{{ sensor.name }}</child>
+</joint>
+
+{% endif -%}

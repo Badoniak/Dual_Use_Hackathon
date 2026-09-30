@@ -1,0 +1,171 @@
+<?xml version="1.0"?>
+
+<sdf version="1.6">
+    <world name="disaster_site">
+        <physics name="4ms" type="ignored">
+            <max_step_size>0.004</max_step_size>
+            <real_time_factor>1.0</real_time_factor>
+        </physics>
+        <plugin
+            filename="ignition-gazebo-physics-system"
+            name="ignition::gazebo::systems::Physics">
+        </plugin>
+        <plugin
+            filename="ignition-gazebo-scene-broadcaster-system"
+            name="ignition::gazebo::systems::SceneBroadcaster">
+        </plugin>
+        <plugin
+            filename="ignition-gazebo-user-commands-system"
+            name="ignition::gazebo::systems::UserCommands">
+        </plugin>
+        <plugin
+            filename="ignition-gazebo-sensors-system"
+            name="ignition::gazebo::systems::Sensors">
+            <render_engine>ogre2</render_engine>
+        </plugin>
+
+        <light type="directional"
+            name="sun">
+            <cast_shadows>true</cast_shadows>
+            <pose>0 0 10 0 0 0</pose>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+            <attenuation>
+                <range>1000</range>
+                <constant>0.9</constant>
+                <linear>0.01</linear>
+                <quadratic>0.001</quadratic>
+            </attenuation>
+            <direction>-0.5 0.1 -0.9</direction>
+        </light>
+
+        {% if use_origin -%}
+
+        <spherical_coordinates>
+            <surface_model>EARTH_WGS84</surface_model>
+            <latitude_deg>{{ origin.latitude }}</latitude_deg>
+            <longitude_deg>{{ origin.longitude }}</longitude_deg>
+            <elevation>{{ origin.altitude }}</elevation>
+            <heading_deg>0.0</heading_deg>
+        </spherical_coordinates>
+
+        {% endif -%}
+
+        <!-- Inline ground instead of model://ground_plane, so it can carry a temperature.
+             Sun-warmed asphalt sits well above air temperature and gives the thermal image a
+             background to work against; the stock ground_plane has no Thermal plugin. -->
+        <model name="ground_plane">
+            <static>true</static>
+            <link name="link">
+                <collision name="collision">
+                    <geometry>
+                        <plane><normal>0 0 1</normal><size>200 200</size></plane>
+                    </geometry>
+                </collision>
+                <visual name="visual">
+                    <geometry>
+                        <plane><normal>0 0 1</normal><size>200 200</size></plane>
+                    </geometry>
+                    <material>
+                        <ambient>0.35 0.35 0.35 1</ambient>
+                        <diffuse>0.4 0.4 0.4 1</diffuse>
+                        <specular>0.1 0.1 0.1 1</specular>
+                    </material>
+                    <plugin
+                        filename="ignition-gazebo-thermal-system"
+                        name="ignition::gazebo::systems::Thermal">
+                        <temperature>301.0</temperature>
+                    </plugin>
+                </visual>
+            </link>
+        </model>
+
+        <!-- Local copies of the Gazebo Fuel models "Fire station (collapsed)" (chapulina)
+             and "Collapsed industrial building" (OpenRobotics). Textures were moved next to
+             the meshes, because the .dae files reference them by bare file name. -->
+        <include>
+            <name>fire_station_collapsed</name>
+            <uri>model://fire_station_collapsed</uri>
+            <pose>25 0 0 0 0 0</pose>
+        </include>
+        <include>
+            <name>collapsed_industrial_building</name>
+            <uri>model://collapsed_industrial_building</uri>
+            <pose>-25 0 0 0 0 0</pose>
+        </include>
+
+        <!-- Thermal targets. The Thermal system plugin is what makes the thermal camera see
+             a body at a temperature other than ambient; everything without it is rendered at
+             the ambient temperature. These sit at the same coordinates as the entries in
+             config/sound_sources.yaml, so the thermal camera and the microphone see the same
+             targets and the two can be cross-checked downstream. -->
+        {% macro heat_body(name, x, y, z, sx, sy, sz, kelvin, r, g, b) -%}
+        <model name="{{ name }}">
+            <static>true</static>
+            <pose>{{ x }} {{ y }} {{ z }} 0 0 0</pose>
+            <link name="link">
+                <collision name="collision">
+                    <geometry>
+                        <box><size>{{ sx }} {{ sy }} {{ sz }}</size></box>
+                    </geometry>
+                </collision>
+                <visual name="visual">
+                    <geometry>
+                        <box><size>{{ sx }} {{ sy }} {{ sz }}</size></box>
+                    </geometry>
+                    <material>
+                        <diffuse>{{ r }} {{ g }} {{ b }} 1</diffuse>
+                    </material>
+                    <plugin
+                        filename="ignition-gazebo-thermal-system"
+                        name="ignition::gazebo::systems::Thermal">
+                        <temperature>{{ kelvin }}</temperature>
+                    </plugin>
+                </visual>
+            </link>
+        </model>
+        {%- endmacro %}
+
+        <!-- 310.15 K = 37 C, human body -->
+        {{ heat_body('survivor_fire_station', 23.0, 3.5, 0.2, 1.7, 0.45, 0.4, 310.15, 0.75, 0.6, 0.5) }}
+        {{ heat_body('survivor_industrial', -24.0, -2.5, 0.2, 1.7, 0.45, 0.4, 309.15, 0.75, 0.6, 0.5) }}
+        <!-- 450 K = 177 C, smouldering debris -->
+        {{ heat_body('smouldering_fire', 26.0, -5.0, 0.3, 1.2, 1.2, 0.6, 450.0, 0.3, 0.15, 0.1) }}
+        <!-- 330 K = 57 C, an engine block that ran recently -->
+        {{ heat_body('warm_vehicle', -26.5, 4.0, 0.6, 3.8, 1.7, 1.2, 330.0, 0.25, 0.3, 0.45) }}
+
+        <!-- Standing wall sections. A real facade is never one temperature: the side facing
+             the sun runs much hotter than the one in shadow, and that contrast is most of what
+             a thermal image of a building actually shows. -->
+        {{ heat_body('wall_south_sunlit', 20.5, -7.0, 1.6, 0.35, 7.0, 3.2, 312.0, 0.55, 0.52, 0.5) }}
+        {{ heat_body('wall_north_shaded', 20.5, 7.0, 1.4, 0.35, 6.0, 2.8, 291.0, 0.5, 0.5, 0.52) }}
+        {{ heat_body('wall_industrial_sunlit', -20.0, -6.5, 1.8, 0.35, 8.0, 3.6, 308.0, 0.55, 0.52, 0.5) }}
+        {{ heat_body('wall_industrial_shaded', -20.0, 6.5, 1.5, 0.35, 6.5, 3.0, 289.5, 0.5, 0.5, 0.52) }}
+
+        <!-- Scattered hotspots: embers, hot debris, warm pockets and electrical faults.
+             Positions and temperatures were drawn once with a fixed seed, so the scene is
+             random-looking but reproducible from run to run, which is what you want when you
+             are scoring a detection algorithm against it. -->
+        {% set hotspots = [
+            ['hotspot_00', 25.87, -3.84, 0.33, 0.65, 309.6],
+            ['hotspot_01', -22.57, -0.63, 0.24, 0.48, 434.0],
+            ['hotspot_02', -2.1, -1.96, 0.36, 0.72, 309.9],
+            ['hotspot_03', 26.67, 2.25, 0.38, 0.76, 314.8],
+            ['hotspot_04', -25.91, -3.32, 0.47, 0.94, 353.3],
+            ['hotspot_05', 2.7, 9.75, 0.47, 0.93, 341.4],
+            ['hotspot_06', 25.63, -2.72, 0.39, 0.78, 306.8],
+            ['hotspot_07', -31.95, 5.56, 0.55, 1.09, 316.3],
+            ['hotspot_08', -6.6, 5.8, 0.48, 0.96, 392.7],
+            ['hotspot_09', 26.17, 0.18, 0.18, 0.37, 446.4],
+            ['hotspot_10', -22.63, -1.9, 0.15, 0.31, 432.3],
+            ['hotspot_11', -2.51, 2.26, 0.31, 0.62, 436.6],
+            ['hotspot_12', 27.67, -0.45, 0.36, 0.72, 305.6],
+            ['hotspot_13', -26.67, -3.67, 0.26, 0.51, 396.5],
+            ['hotspot_14', -3.39, -4.3, 0.36, 0.72, 395.4],
+            ['hotspot_15', 19.24, -3.12, 0.32, 0.63, 303.8]
+        ] -%}
+        {% for h in hotspots -%}
+        {{ heat_body(h[0], h[1], h[2], h[3], h[4], h[4], h[4], h[5], 0.35, 0.2, 0.15) }}
+        {% endfor -%}
+    </world>
+</sdf>

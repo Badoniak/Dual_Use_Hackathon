@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""
+Simulated microphone for the AS2 Gazebo assets.
+
+Gazebo Fortress has no acoustic sensor, so this node synthesises the waveform instead of
+bridging one. For every chunk it takes the microphone pose from tf and, for each sound source
+declared in the sources file, mixes in a signal that is attenuated by distance and delayed by
+the travel time of sound. On top of that it adds the drone's own rotor noise, which is exactly
+the kind of interference a downstream algorithm is expected to remove.
+
+Published as foxglove_msgs/RawAudio (interleaved little-endian PCM S16).
+"""
+
+__authors__ = 'Generated for the disaster_site simulation'
+__license__ = 'BSD-3-Clause'
+
+import math
+
+from foxglove_msgs.msg import RawAudio
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+import tf2_ros
+import yaml
+
+SPEED_OF_SOUND = 343.0
+
+
+def quat_to_yaw(q) -> float:
+    """Yaw of a quaternion, in radians."""
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
+def voice(t: np.ndarray, f0: float, period: float, duration: float) -> np.ndarray:
+    """
+    A human-like call: bursts of a harmonic stack, shaped by a syllable envelope.
+
+    Meant to stand in for a trapped person shouting at intervals, not to be intelligible.
+    """
+    phase = np.mod(t, period)
+    active = phase < duration
+    # Raised-cosine attack/release so the burst has no clicks.
+    env = np.where(active, 0.5 * (1.0 - np.cos(2.0 * np.pi * phase / max(duration, 1e-6))), 0.0)
+    # Syllables at ~3 Hz inside the burst.
+    env = env * (0.55 + 0.45 * np.sin(2.0 * np.pi * 3.0 * phase))
+    sig = np.zeros_like(t)
+    for h, amp in enumerate((1.0, 0.6, 0.35, 0.22, 0.13, 0.08), start=1):
+        # Slight vibrato keeps it from sounding like a pure synthetic tone.
+        vib = 1.0 + 0.012 * np.sin(2.0 * np.pi * 5.0 * t)
+        sig += amp * np.sin(2.0 * np.pi * f0 * h * vib * t)
+    return sig / 2.38 * env
+
+
+def tone(t: np.ndarray, f0: float, period: float, duration: float) -> np.ndarray:
+    """A steady beacon-like tone, gated on and off (e.g. a phone or an alarm)."""
+    gate = (np.mod(t, period) < duration).astype(float)
+    return np.sin(2.0 * np.pi * f0 * t) * gate
+
+
+def crackle(t: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Broadband noise with slow amplitude drift, for fire or settling rubble."""
+    n = rng.standard_normal(t.shape)
+    drift = 0.6 + 0.4 * np.sin(2.0 * np.pi * 0.3 * t)
+    return n * drift
+
+
+SIGNALS = {'voice': voice, 'tone': tone, 'crackle': crackle}
+
+
+class Microphone(Node):
+    """Synthesise and publish microphone audio."""
+
+    def __init__(self):
+        super().__init__('microphone')
+
+        self.declare_parameter('sensor_name', 'microphone')
+        self.declare_parameter('drone_name', 'drone0')
+        self.declare_parameter('sources_file', '')
+        self.declare_parameter('sample_rate', 16000)
+        self.declare_parameter('chunk_seconds', 0.25)
+        self.declare_parameter('channels', 2)
+        self.declare_parameter('mic_spacing', 0.15)
+        self.declare_parameter('rotor_noise_level', 0.045)
+        self.declare_parameter('reference_distance', 1.0)
+
+        self.sensor_name = self.get_parameter('sensor_name').value
+        self.drone_name = self.get_parameter('drone_name').value
+        self.fs = int(self.get_parameter('sample_rate').value)
+        self.chunk = float(self.get_parameter('chunk_seconds').value)
+        self.channels = max(1, min(2, int(self.get_parameter('channels').value)))
+        self.spacing = float(self.get_parameter('mic_spacing').value)
+        self.rotor_level = float(self.get_parameter('rotor_noise_level').value)
+        self.ref_dist = float(self.get_parameter('reference_distance').value)
+
+        self.sources = self._load_sources(self.get_parameter('sources_file').value)
+        self.rng = np.random.default_rng(1234)
+        self.sample_index = 0
+
+        self.buffer = tf2_ros.Buffer()
+        self.listener = tf2_ros.TransformListener(self.buffer, self)
+
+        self.mic_frame = f'{self.drone_name}/{self.sensor_name}/microphone'
+        self.fallback_frame = f'{self.drone_name}/base_link'
+        self.pub = self.create_publisher(
+            RawAudio, f'sensor_measurements/{self.sensor_name}/audio', qos_profile_sensor_data)
+
+        self.n = int(round(self.fs * self.chunk))
+        self.create_timer(self.chunk, self.tick)
+        self.warned = False
+        self.get_logger().info(
+            f'Simulated microphone: {self.fs} Hz, {self.channels} ch, '
+            f'{len(self.sources)} source(s)')
+
+    def _load_sources(self, path: str) -> list:
+        if not path:
+            return []
+        try:
+            with open(path, 'r', encoding='utf-8') as handle:
+                data = yaml.safe_load(handle) or {}
+        except OSError as err:
+            self.get_logger().warn(f'Cannot read sound sources file {path}: {err}')
+            return []
+        out = []
+        for src in data.get('sources', []):
+            kind = src.get('type', 'voice')
+            if kind not in SIGNALS:
+                self.get_logger().warn(f"Unknown sound source type '{kind}', skipping")
+                continue
+            out.append({
+                'name': src.get('name', kind),
+                'xyz': np.array(src.get('xyz', [0.0, 0.0, 0.0]), dtype=float),
+                'type': kind,
+                'amplitude': float(src.get('amplitude', 0.8)),
+                'f0': float(src.get('f0', 180.0)),
+                'period': float(src.get('period', 4.0)),
+                'duration': float(src.get('duration', 0.9)),
+            })
+        return out
+
+    def mic_positions(self):
+        """Return world positions of each capsule, or None while tf is not ready yet."""
+        for frame in (self.mic_frame, self.fallback_frame):
+            try:
+                tr = self.buffer.lookup_transform('earth', frame, rclpy.time.Time())
+            except tf2_ros.TransformException:
+                continue
+            t = tr.transform.translation
+            centre = np.array([t.x, t.y, t.z])
+            if self.channels == 1:
+                return [centre]
+            # Capsules sit on the body Y axis, so a source off to one side reaches
+            # them at measurably different times.
+            yaw = quat_to_yaw(tr.transform.rotation)
+            side = np.array([-math.sin(yaw), math.cos(yaw), 0.0]) * (self.spacing / 2.0)
+            return [centre + side, centre - side]
+        return None
+
+    def rotor_noise(self, t: np.ndarray) -> np.ndarray:
+        """Broadband hiss plus blade-passing tones: the drone's own interference."""
+        hiss = self.rng.standard_normal(t.shape)
+        # Cheap one-pole low pass to colour the hiss instead of leaving it white.
+        alpha = 0.35
+        for i in range(1, hiss.size):
+            hiss[i] = alpha * hiss[i] + (1.0 - alpha) * hiss[i - 1]
+        tones = sum(
+            amp * np.sin(2.0 * np.pi * f * t)
+            for f, amp in ((98.0, 1.0), (196.0, 0.5), (294.0, 0.28), (412.0, 0.15))
+        )
+        return self.rotor_level * (0.75 * hiss + 0.45 * tones)
+
+    def tick(self):
+        positions = self.mic_positions()
+        if positions is None:
+            if not self.warned:
+                self.get_logger().warn(
+                    f'Waiting for tf earth -> {self.mic_frame}; publishing silence meanwhile')
+                self.warned = True
+            positions = None
+
+        t0 = self.sample_index / self.fs
+        t = t0 + np.arange(self.n, dtype=float) / self.fs
+        chans = []
+        for ch in range(self.channels):
+            mix = self.rotor_noise(t)
+            if positions is not None:
+                mic = positions[ch]
+                for src in self.sources:
+                    dist = float(np.linalg.norm(src['xyz'] - mic))
+                    gain = src['amplitude'] * self.ref_dist / max(dist, self.ref_dist)
+                    if gain < 1e-4:
+                        continue
+                    # Retarded time: what the source emitted dist/c seconds ago.
+                    t_src = t - dist / SPEED_OF_SOUND
+                    fn = SIGNALS[src['type']]
+                    if src['type'] == 'crackle':
+                        mix += gain * fn(t_src, self.rng)
+                    else:
+                        mix += gain * fn(t_src, src['f0'], src['period'], src['duration'])
+            chans.append(mix)
+
+        frame = np.stack(chans, axis=-1) if self.channels > 1 else chans[0][:, None]
+        frame = np.clip(frame, -1.0, 1.0)
+        pcm = (frame * 32767.0).astype('<i2').reshape(-1)
+
+        msg = RawAudio()
+        msg.timestamp = self.get_clock().now().to_msg()
+        msg.data = pcm.tobytes()
+        msg.format = 'pcm-s16'
+        msg.sample_rate = self.fs
+        msg.number_of_channels = self.channels
+        self.pub.publish(msg)
+        self.sample_index += self.n
+
+
+def main():
+    rclpy.init()
+    node = Microphone()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

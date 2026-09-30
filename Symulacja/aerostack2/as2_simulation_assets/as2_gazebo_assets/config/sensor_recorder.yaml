@@ -1,0 +1,134 @@
+# What sensor_recorder archives, and how fast.
+#
+# These defaults are tuned to keep a laptop responsive: an earlier pass at 2 Hz images and
+# both cloud formats on every stream produced 4.7 GB from a single short flight, and the
+# PNG compression alone was enough to make the simulation stutter.
+#
+# max_hz caps how often a stream is written (0 = every message). image_format: jpg applies
+# only to colour frames; depth and thermal are always lossless PNG because their pixel values
+# are measurements, not pictures. formats picks which point cloud files to emit.
+#
+# transform_to_world: true rotates the cloud into world_frame before saving, so the files can
+# be concatenated straight into one 3D map. The sensor pose is written to index.csv either way.
+
+world_frame: earth
+drone_frame: drone0/base_link
+trajectory_hz: 10.0
+depth_png_scale_mm: 1000.0        # uint16 PNG counts per metre
+thermal_kelvin_per_count: 0.01    # must match <resolution> in thermal_camera.sdf.jinja
+
+ground_truth_files:
+  - /home/dawid/aerostack2_ws/install/as2_gazebo_assets/share/as2_gazebo_assets/config/sound_sources.yaml
+
+# One coloured cloud for the whole flight, instead of a file per scan. Lidar and the RGBD
+# camera are merged into the same map in the world frame, so the result is a single file to
+# hand to another application.
+#
+# Colour: the RGBD cloud already carries rgb and keeps it. Lidar has none, so its points are
+# projected into the colour camera below and sampled from the image; the 360 degree lidar sees
+# far more than the camera's 60 degree cone, so whatever falls outside gets fallback_color.
+# Use the HD camera here and not the RGBD one: only the HD camera still publishes a true ROS
+# optical frame, which is what the pinhole projection assumes.
+#
+# voxel_size is what keeps the file sane. Repeated scans of the same wall collapse onto one
+# point per 5 cm cell; set it to 0 to keep every point and watch the file grow without bound.
+point_cloud_map:
+  enabled: true
+  filename: point_cloud_map        # written into the session root as .ply and .pcd
+  formats: [ply, pcd]
+  voxel_size: 0.1
+  flush_seconds: 60.0              # also written on shutdown
+  fallback_color: height           # height | grey - for points the camera never saw
+  height_range: [0.0, 12.0]        # metres, for the height ramp
+  colorize_from:
+    image_topic: /drone0/sensor_measurements/hd_camera/image_raw
+    camera_info_topic: /drone0/sensor_measurements/hd_camera/camera_info
+    max_age: 0.5                   # s; older frames are not trusted to match the cloud
+  sources:
+    - topic: /drone0/sensor_measurements/lidar_3d/points
+      max_hz: 2.0
+    - topic: /drone0/sensor_measurements/rgbd_camera/points
+      max_hz: 1.0
+
+streams:
+  - name: hd_camera
+    topic: /drone0/sensor_measurements/hd_camera/image_raw
+    kind: image_rgb
+    max_hz: 1.0
+    image_format: jpg
+    jpeg_quality: 92
+
+  - name: hd_camera_info
+    topic: /drone0/sensor_measurements/hd_camera/camera_info
+    kind: camera_info
+
+  - name: rgbd_camera_rgb
+    topic: /drone0/sensor_measurements/rgbd_camera/image_raw
+    kind: image_rgb
+    max_hz: 1.0
+    image_format: jpg
+    jpeg_quality: 92
+
+  - name: rgbd_camera_depth
+    topic: /drone0/sensor_measurements/rgbd_camera/depth
+    kind: image_depth
+    max_hz: 1.0
+
+  - name: rgbd_camera_info
+    topic: /drone0/sensor_measurements/rgbd_camera/camera_info
+    kind: camera_info
+
+  # Off by default: this was by far the heaviest stream (842 MB in 30 s) and the lidar
+  # already covers the same volume. Turn it on when you specifically want dense colour
+  # geometry close to the drone, and expect the disk cost.
+  - name: rgbd_camera_points
+    topic: /drone0/sensor_measurements/rgbd_camera/points
+    kind: pointcloud
+    enabled: false
+    max_hz: 0.5
+    formats: [pcd]
+    transform_to_world: true
+
+  - name: thermal_camera
+    topic: /drone0/sensor_measurements/thermal_camera/image_raw
+    kind: image_thermal
+    max_hz: 2.0
+
+  - name: thermal_camera_info
+    topic: /drone0/sensor_measurements/thermal_camera/camera_info
+    kind: camera_info
+
+  # Off by default: point_cloud_map above already merges this topic into one file. Turn it
+  # back on only if you need the individual scans, e.g. to re-run registration yourself.
+  - name: lidar_3d
+    topic: /drone0/sensor_measurements/lidar_3d/points
+    kind: pointcloud
+    enabled: false
+    max_hz: 2.0
+    formats: [pcd]
+    transform_to_world: true
+
+  - name: imu
+    topic: /drone0/sensor_measurements/imu
+    kind: imu
+    max_hz: 50.0
+
+  - name: magnetometer
+    topic: /drone0/sensor_measurements/magnetometer
+    kind: magnetometer
+    max_hz: 10.0
+
+  - name: air_pressure
+    topic: /drone0/sensor_measurements/air_pressure
+    kind: fluid_pressure
+    max_hz: 10.0
+
+  - name: gps
+    topic: /drone0/sensor_measurements/gps
+    kind: navsat
+    max_hz: 10.0
+
+  - name: microphone
+    topic: /drone0/sensor_measurements/microphone/audio
+    kind: audio
+    max_hz: 0.0    # never throttle audio: dropping a chunk punches a hole in the WAV

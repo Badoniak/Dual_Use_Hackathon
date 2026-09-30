@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    use_gps: false  # Use GPS data
+    set_origin_on_start: false  # Set origin of the map frame with the first GPS data
+    # Hang odom off the Gazebo model frame (drone0) instead of drone0/base_link.
+    # The Gazebo PosePublisher roots every sensor frame under drone0, so without this the
+    # sensor half of the tf tree stays detached from earth (and drone0/base_link ends up with
+    # two parents: drone0 from Gazebo and drone0/odom from this estimator).
+    use_gazebo_tf: true

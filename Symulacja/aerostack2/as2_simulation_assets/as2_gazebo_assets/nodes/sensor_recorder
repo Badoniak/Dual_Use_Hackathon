@@ -1,0 +1,834 @@
+#!/usr/bin/env python3
+"""
+Archive every simulated sensor to standalone files, one directory per sensor.
+
+Nothing here depends on ROS tooling to read back: images are PNG, point clouds are PCD and
+PLY, scalar sensors are CSV, GPS is CSV plus GPX, audio is WAV. Each sensor directory also
+carries an index.csv that pairs every file with its timestamp and the sensor pose in the world
+frame, which is what lets an external application drop the data onto a shared 3D map.
+
+Streams, their formats and their write rates come from a YAML config (see
+config/sensor_recorder.yaml).
+"""
+
+__authors__ = 'Generated for the disaster_site simulation'
+__license__ = 'BSD-3-Clause'
+
+import csv
+import datetime
+import json
+import math
+import os
+import shutil
+import wave
+
+import cv2
+from cv_bridge import CvBridge
+from foxglove_msgs.msg import RawAudio
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import (CameraInfo, FluidPressure, Image, Imu, MagneticField,
+                             NavSatFix, PointCloud2)
+import tf2_ros
+import yaml
+
+_PC_DTYPE = {1: 'i1', 2: 'u1', 3: 'i2', 4: 'u2', 5: 'i4', 6: 'u4', 7: 'f4', 8: 'f8'}
+
+CSV_HEADERS = {
+    'imu': ['stamp', 'frame_id',
+            'orientation_x', 'orientation_y', 'orientation_z', 'orientation_w',
+            'angular_velocity_x', 'angular_velocity_y', 'angular_velocity_z',
+            'linear_acceleration_x', 'linear_acceleration_y', 'linear_acceleration_z'],
+    'magnetometer': ['stamp', 'frame_id', 'magnetic_field_x', 'magnetic_field_y',
+                     'magnetic_field_z'],
+    'fluid_pressure': ['stamp', 'frame_id', 'fluid_pressure_pa', 'variance'],
+    'navsat': ['stamp', 'frame_id', 'latitude_deg', 'longitude_deg', 'altitude_m',
+               'status', 'service', 'position_covariance_type',
+               'cov_ee', 'cov_nn', 'cov_uu'],
+}
+
+INDEX_HEADER = ['filename', 'stamp', 'frame_id',
+                'pos_x', 'pos_y', 'pos_z', 'quat_x', 'quat_y', 'quat_z', 'quat_w']
+
+
+def stamp_to_float(stamp) -> float:
+    """Seconds as a float from a builtin_interfaces/Time."""
+    return stamp.sec + stamp.nanosec * 1e-9
+
+
+def read_points(msg: PointCloud2):
+    """Return (xyz float32 Nx3, rgb uint8 Nx3 or None) with non-finite points dropped."""
+    names, formats, offsets = [], [], []
+    for field in msg.fields:
+        if field.datatype not in _PC_DTYPE or field.name in names:
+            continue
+        names.append(field.name)
+        formats.append(_PC_DTYPE[field.datatype])
+        offsets.append(field.offset)
+    if not {'x', 'y', 'z'} <= set(names):
+        return None, None
+    dtype = np.dtype({'names': names, 'formats': formats, 'offsets': offsets,
+                      'itemsize': msg.point_step})
+    arr = np.frombuffer(msg.data, dtype=dtype, count=msg.width * msg.height)
+
+    xyz = np.stack([arr['x'], arr['y'], arr['z']], axis=-1).astype(np.float32)
+    keep = np.isfinite(xyz).all(axis=1)
+
+    rgb = None
+    for candidate in ('rgb', 'rgba'):
+        if candidate in names:
+            raw = arr[candidate]
+            packed = raw.view(np.uint32) if raw.dtype.kind == 'f' else raw.astype(np.uint32)
+            rgb = np.stack([(packed >> 16) & 0xFF, (packed >> 8) & 0xFF, packed & 0xFF],
+                           axis=-1).astype(np.uint8)
+            break
+
+    return xyz[keep], (rgb[keep] if rgb is not None else None)
+
+
+def write_pcd(path: str, xyz: np.ndarray, rgb=None):
+    """Binary PCD v0.7. With colour the rgb channel uses the usual PCL float packing."""
+    count = xyz.shape[0]
+    if rgb is None:
+        header = ('# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n'
+                  'FIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n'
+                  f'WIDTH {count}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\n'
+                  f'POINTS {count}\nDATA binary\n')
+        body = xyz.astype('<f4').tobytes()
+    else:
+        header = ('# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\n'
+                  'FIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\n'
+                  f'WIDTH {count}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\n'
+                  f'POINTS {count}\nDATA binary\n')
+        packed = ((rgb[:, 0].astype(np.uint32) << 16) |
+                  (rgb[:, 1].astype(np.uint32) << 8) |
+                  rgb[:, 2].astype(np.uint32)).view(np.float32)
+        body = np.concatenate([xyz.astype('<f4'), packed.reshape(-1, 1)], axis=1).tobytes()
+    with open(path, 'wb') as handle:
+        handle.write(header.encode('ascii'))
+        handle.write(body)
+
+
+def write_ply(path: str, xyz: np.ndarray, rgb=None):
+    """Binary little-endian PLY, readable by CloudCompare, MeshLab, Open3D and Blender."""
+    count = xyz.shape[0]
+    lines = ['ply', 'format binary_little_endian 1.0', f'element vertex {count}',
+             'property float x', 'property float y', 'property float z']
+    if rgb is not None:
+        lines += ['property uchar red', 'property uchar green', 'property uchar blue']
+    lines.append('end_header')
+    with open(path, 'wb') as handle:
+        handle.write(('\n'.join(lines) + '\n').encode('ascii'))
+        if rgb is None:
+            handle.write(xyz.astype('<f4').tobytes())
+        else:
+            dtype = np.dtype([('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
+                              ('r', 'u1'), ('g', 'u1'), ('b', 'u1')])
+            out = np.empty(count, dtype=dtype)
+            out['x'], out['y'], out['z'] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+            out['r'], out['g'], out['b'] = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+            handle.write(out.tobytes())
+
+
+def quat_matrix(q) -> np.ndarray:
+    """Rotation matrix from a geometry_msgs quaternion."""
+    x, y, z, w = q.x, q.y, q.z, q.w
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]],
+        dtype=np.float32)
+
+
+def voxel_reduce(xyz: np.ndarray, rgb: np.ndarray, voxel: float):
+    """
+    Collapse points onto a voxel grid, averaging position and colour inside each cell.
+
+    Overlapping scans of the same wall are what makes an accumulated map explode in size;
+    one point per cell keeps the file loadable while preserving the surface.
+    """
+    if voxel <= 0.0 or xyz.shape[0] == 0:
+        return xyz, rgb
+    keys = np.floor(xyz / voxel).astype(np.int64)
+    keys -= keys.min(axis=0)
+    dims = keys.max(axis=0) + 1
+    # Exact packing (no hashing, so no collisions) as long as the product fits in int64.
+    if float(dims[0]) * float(dims[1]) * float(dims[2]) >= 9.0e18:
+        return xyz, rgb
+    flat = (keys[:, 0] * dims[1] + keys[:, 1]) * dims[2] + keys[:, 2]
+    _, inverse = np.unique(flat, return_inverse=True)
+    counts = np.bincount(inverse).astype(np.float64)
+    out_xyz = np.stack(
+        [np.bincount(inverse, weights=xyz[:, i].astype(np.float64)) / counts for i in range(3)],
+        axis=1).astype(np.float32)
+    out_rgb = np.stack(
+        [np.bincount(inverse, weights=rgb[:, i].astype(np.float64)) / counts for i in range(3)],
+        axis=1).round().clip(0, 255).astype(np.uint8)
+    return out_xyz, out_rgb
+
+
+class PointCloudMap:
+    """
+    One coloured cloud for the whole flight, fed by several sensors at once.
+
+    Per-scan files are awkward to hand to another application: hundreds of them have to be
+    read, transformed and merged before anything can be drawn. This keeps a single running
+    map in the world frame instead. Clouds that carry their own colour (the RGBD camera) use
+    it; the lidar has none, so its points are projected into the colour camera and sampled
+    from the image, and whatever falls outside the camera's field of view gets the configured
+    fallback.
+    """
+
+    def __init__(self, spec: dict, session_dir: str):
+        self.filename = spec.get('filename', 'point_cloud_map')
+        self.formats = [str(f).lower() for f in spec.get('formats', ['ply', 'pcd'])]
+        self.voxel = float(spec.get('voxel_size', 0.05))
+        self.flush_seconds = float(spec.get('flush_seconds', 60.0))
+        self.fallback = str(spec.get('fallback_color', 'height')).lower()
+        self.height_range = [float(v) for v in spec.get('height_range', [0.0, 12.0])]
+        self.dir = session_dir
+        self.xyz = np.zeros((0, 3), dtype=np.float32)
+        self.rgb = np.zeros((0, 3), dtype=np.uint8)
+        self.buf_xyz = []
+        self.buf_rgb = []
+        self.buffered = 0
+        self.points_in = 0
+        self.clouds_in = 0
+        self.colored_from_camera = 0
+        self.sources = {}
+
+    def add(self, xyz: np.ndarray, rgb: np.ndarray):
+        self.buf_xyz.append(xyz)
+        self.buf_rgb.append(rgb)
+        self.buffered += xyz.shape[0]
+        self.points_in += xyz.shape[0]
+        self.clouds_in += 1
+        if self.buffered > 2_000_000:
+            self.consolidate()
+
+    def consolidate(self):
+        """Fold the buffer into the map and re-run the voxel filter over the whole thing."""
+        if not self.buf_xyz:
+            return
+        xyz = np.concatenate([self.xyz] + self.buf_xyz, axis=0)
+        rgb = np.concatenate([self.rgb] + self.buf_rgb, axis=0)
+        self.buf_xyz, self.buf_rgb, self.buffered = [], [], 0
+        self.xyz, self.rgb = voxel_reduce(xyz, rgb, self.voxel)
+
+    def height_colors(self, xyz: np.ndarray) -> np.ndarray:
+        lo, hi = self.height_range
+        t = np.clip((xyz[:, 2] - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+        ramp = cv2.applyColorMap((t * 255).astype(np.uint8).reshape(-1, 1),
+                                 cv2.COLORMAP_TURBO).reshape(-1, 3)
+        return ramp[:, ::-1].copy()      # BGR -> RGB
+
+    def neutral_colors(self, n: int) -> np.ndarray:
+        return np.full((n, 3), 160, dtype=np.uint8)
+
+    def write(self):
+        self.consolidate()
+        if self.xyz.shape[0] == 0:
+            return []
+        written = []
+        if 'ply' in self.formats:
+            path = os.path.join(self.dir, self.filename + '.ply')
+            write_ply(path, self.xyz, self.rgb)
+            written.append(os.path.basename(path))
+        if 'pcd' in self.formats:
+            path = os.path.join(self.dir, self.filename + '.pcd')
+            write_pcd(path, self.xyz, self.rgb)
+            written.append(os.path.basename(path))
+        return written
+
+
+class Stream:
+    """One recorded topic: its directory, its index file and its rate budget."""
+
+    def __init__(self, spec: dict, session_dir: str):
+        self.name = spec['name']
+        self.topic = spec['topic']
+        self.kind = spec['kind']
+        self.max_hz = float(spec.get('max_hz', 0.0))
+        self.transform = bool(spec.get('transform_to_world', False))
+        # Colour frames may go out as JPEG: PNG of a 1280x960 frame costs both disk and a
+        # surprising amount of CPU to compress, and that compression happens in the middle
+        # of the simulation. Depth and thermal always stay lossless.
+        self.image_format = str(spec.get('image_format', 'png')).lower().lstrip('.')
+        self.jpeg_quality = int(spec.get('jpeg_quality', 92))
+        self.formats = [str(f).lower() for f in spec.get('formats', ['pcd', 'ply'])]
+        self.dir = os.path.join(session_dir, self.name)
+        os.makedirs(self.dir, exist_ok=True)
+        self.count = 0
+        self.dropped = 0
+        self.last_write = None
+        self.index_handle = None
+        self.index_writer = None
+        self.csv_handle = None
+        self.csv_writer = None
+        self.wav = None
+        self.wav_path = None
+        self.gpx_points = []
+
+    def due(self, now: float) -> bool:
+        """Rate limiting, so a 20 Hz HD camera does not melt the disk."""
+        if self.max_hz <= 0.0:
+            return True
+        if self.last_write is not None and (now - self.last_write) < (1.0 / self.max_hz):
+            self.dropped += 1
+            return False
+        self.last_write = now
+        return True
+
+    def index(self):
+        if self.index_writer is None:
+            self.index_handle = open(os.path.join(self.dir, 'index.csv'), 'w',
+                                     newline='', encoding='utf-8')
+            self.index_writer = csv.writer(self.index_handle)
+            self.index_writer.writerow(INDEX_HEADER)
+        return self.index_writer
+
+    def table(self):
+        if self.csv_writer is None:
+            self.csv_handle = open(os.path.join(self.dir, f'{self.name}.csv'), 'w',
+                                   newline='', encoding='utf-8')
+            self.csv_writer = csv.writer(self.csv_handle)
+            self.csv_writer.writerow(CSV_HEADERS[self.kind])
+        return self.csv_writer
+
+    def close(self):
+        for handle in (self.index_handle, self.csv_handle):
+            if handle is not None:
+                handle.close()
+        if self.wav is not None:
+            self.wav.close()
+
+
+class SensorRecorder(Node):
+    """Subscribe to every configured sensor and write it out as standalone files."""
+
+    def __init__(self):
+        super().__init__('sensor_recorder')
+
+        self.declare_parameter('config_file', '')
+        self.declare_parameter('output_dir', os.path.expanduser('~/as2_recordings'))
+        self.declare_parameter('session_name', '')
+
+        config_file = self.get_parameter('config_file').value
+        with open(config_file, 'r', encoding='utf-8') as handle:
+            self.config = yaml.safe_load(handle) or {}
+
+        self.world_frame = self.config.get('world_frame', 'earth')
+        self.drone_frame = self.config.get('drone_frame', 'drone0/base_link')
+        self.depth_scale = float(self.config.get('depth_png_scale_mm', 1000.0))
+        self.thermal_res = float(self.config.get('thermal_kelvin_per_count', 0.01))
+
+        session = self.get_parameter('session_name').value
+        if not session:
+            session = 'session_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.session_dir = os.path.join(
+            os.path.expanduser(self.get_parameter('output_dir').value), session)
+        os.makedirs(self.session_dir, exist_ok=True)
+
+        self.bridge = CvBridge()
+        self.buffer = tf2_ros.Buffer()
+        self.listener = tf2_ros.TransformListener(self.buffer, self)
+        self.streams = []
+        self.started = datetime.datetime.now().isoformat(timespec='seconds')
+
+        handlers = {
+            'image_rgb': (Image, self.on_image_rgb),
+            'image_depth': (Image, self.on_image_depth),
+            'image_thermal': (Image, self.on_image_thermal),
+            'pointcloud': (PointCloud2, self.on_pointcloud),
+            'imu': (Imu, self.on_imu),
+            'magnetometer': (MagneticField, self.on_magnetometer),
+            'fluid_pressure': (FluidPressure, self.on_pressure),
+            'navsat': (NavSatFix, self.on_navsat),
+            'audio': (RawAudio, self.on_audio),
+            'camera_info': (CameraInfo, self.on_camera_info),
+        }
+
+        for spec in self.config.get('streams', []):
+            if not spec.get('enabled', True):
+                continue
+            if spec['kind'] not in handlers:
+                self.get_logger().warn(f"Unknown stream kind '{spec['kind']}', skipping")
+                continue
+            stream = Stream(spec, self.session_dir)
+            msg_type, callback = handlers[spec['kind']]
+            self.create_subscription(
+                msg_type, stream.topic,
+                (lambda msg, s=stream, cb=callback: cb(msg, s)),
+                qos_profile_sensor_data)
+            self.streams.append(stream)
+
+        self.setup_map()
+
+        self.pose_handle = open(os.path.join(self.session_dir, 'trajectory.csv'), 'w',
+                                newline='', encoding='utf-8')
+        self.pose_writer = csv.writer(self.pose_handle)
+        self.pose_writer.writerow(['stamp', 'pos_x', 'pos_y', 'pos_z',
+                                   'quat_x', 'quat_y', 'quat_z', 'quat_w'])
+        self.create_timer(1.0 / float(self.config.get('trajectory_hz', 10.0)), self.log_pose)
+        self.create_timer(5.0, self.write_manifest)
+
+        self.copy_ground_truth()
+        self.write_manifest()
+        self.get_logger().info(f'Recording {len(self.streams)} stream(s) into {self.session_dir}')
+        if self.map is not None:
+            self.get_logger().info(
+                f'Building one combined map from {len(self.map.sources)} cloud source(s) '
+                f'-> {self.map.filename}.{{{",".join(self.map.formats)}}}')
+
+    # ------------------------------------------------------------ combined map
+
+    def setup_map(self):
+        """Wire up the single accumulated point cloud map, if it is enabled."""
+        spec = self.config.get('point_cloud_map') or {}
+        self.map = None
+        self.map_image = None          # (rgb image, stamp) from the colouring camera
+        self.map_K = None              # 3x3 intrinsics of that camera
+        self.map_cam_frame = None
+        if not spec.get('enabled', False):
+            return
+
+        self.map = PointCloudMap(spec, self.session_dir)
+        self.map_color_max_age = float(
+            (spec.get('colorize_from') or {}).get('max_age', 1.0))
+
+        for source in spec.get('sources', []):
+            topic = source['topic']
+            self.map.sources[topic] = {
+                'max_hz': float(source.get('max_hz', 0.0)),
+                'last': None,
+                'clouds': 0,
+            }
+            self.create_subscription(
+                PointCloud2, topic,
+                (lambda msg, t=topic: self.on_map_cloud(msg, t)),
+                qos_profile_sensor_data)
+
+        colorize = spec.get('colorize_from') or {}
+        if colorize.get('image_topic'):
+            self.create_subscription(Image, colorize['image_topic'],
+                                     self.on_map_image, qos_profile_sensor_data)
+            self.create_subscription(CameraInfo, colorize['camera_info_topic'],
+                                     self.on_map_camera_info, qos_profile_sensor_data)
+
+        self.create_timer(self.map.flush_seconds, self.flush_map)
+
+    def on_map_camera_info(self, msg: CameraInfo):
+        self.map_K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
+        self.map_cam_frame = msg.header.frame_id.lstrip('/')
+
+    def on_map_image(self, msg: Image):
+        try:
+            bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception:
+            return
+        self.map_image = (bgr[:, :, ::-1].copy(), msg.header.stamp)
+
+    def colorize(self, xyz_world: np.ndarray, stamp):
+        """
+        Sample colour for world points by projecting them into the colour camera.
+
+        Returns (rgb, mask_of_points_that_got_a_real_colour).
+        """
+        n = xyz_world.shape[0]
+        missing = np.zeros(n, dtype=bool)
+        if self.map_image is None or self.map_K is None or self.map_cam_frame is None:
+            return None, missing
+        image, img_stamp = self.map_image
+        if abs(stamp_to_float(stamp) - stamp_to_float(img_stamp)) > self.map_color_max_age:
+            return None, missing
+        try:
+            tr = self.buffer.lookup_transform(
+                self.map_cam_frame, self.world_frame, rclpy.time.Time.from_msg(img_stamp))
+        except tf2_ros.TransformException:
+            try:
+                tr = self.buffer.lookup_transform(
+                    self.map_cam_frame, self.world_frame, rclpy.time.Time())
+            except tf2_ros.TransformException:
+                return None, missing
+
+        t = tr.transform.translation
+        cam = xyz_world @ quat_matrix(tr.transform.rotation).T
+        cam = cam + np.array([t.x, t.y, t.z], dtype=np.float32)
+
+        # Standard pinhole: the camera looks down +Z of its optical frame.
+        z = cam[:, 2]
+        valid = z > 0.1
+        u = np.zeros(n, dtype=np.int64)
+        v = np.zeros(n, dtype=np.int64)
+        safe_z = np.where(valid, z, 1.0)
+        u[valid] = np.round(self.map_K[0, 0] * cam[valid, 0] / safe_z[valid]
+                            + self.map_K[0, 2]).astype(np.int64)
+        v[valid] = np.round(self.map_K[1, 1] * cam[valid, 1] / safe_z[valid]
+                            + self.map_K[1, 2]).astype(np.int64)
+        h, w = image.shape[:2]
+        valid &= (u >= 0) & (u < w) & (v >= 0) & (v < h)
+        if not valid.any():
+            return None, missing
+
+        rgb = np.zeros((n, 3), dtype=np.uint8)
+        rgb[valid] = image[v[valid], u[valid]]
+        return rgb, valid
+
+    def on_map_cloud(self, msg: PointCloud2, topic: str):
+        source = self.map.sources[topic]
+        now = stamp_to_float(msg.header.stamp)
+        if source['max_hz'] > 0.0 and source['last'] is not None \
+                and (now - source['last']) < (1.0 / source['max_hz']):
+            return
+        source['last'] = now
+
+        xyz, rgb = read_points(msg)
+        if xyz is None or xyz.shape[0] == 0:
+            return
+
+        transform = self.pose_of(msg.header.frame_id, msg.header.stamp)
+        if transform is None:
+            return
+        t = transform.transform.translation
+        xyz = xyz @ quat_matrix(transform.transform.rotation).T
+        xyz = xyz + np.array([t.x, t.y, t.z], dtype=np.float32)
+
+        if rgb is None:
+            # Lidar has no colour of its own: take it from the camera where possible.
+            sampled, got = self.colorize(xyz, msg.header.stamp)
+            if self.map.fallback == 'height':
+                rgb = self.map.height_colors(xyz)
+            else:
+                rgb = self.map.neutral_colors(xyz.shape[0])
+            if sampled is not None:
+                rgb[got] = sampled[got]
+                self.map.colored_from_camera += int(got.sum())
+
+        source['clouds'] += 1
+        self.map.add(xyz, rgb)
+
+    def flush_map(self):
+        if self.map is None:
+            return
+        written = self.map.write()
+        if written:
+            self.get_logger().info(
+                f'Map: {self.map.xyz.shape[0]} points from {self.map.clouds_in} clouds '
+                f'-> {", ".join(written)}')
+
+    # ---------------------------------------------------------------- helpers
+
+    def pose_of(self, frame_id: str, stamp):
+        """Pose of a sensor frame in the world frame, or None if tf cannot answer."""
+        frame = (frame_id or '').lstrip('/')
+        if not frame:
+            return None
+        for when in (rclpy.time.Time.from_msg(stamp), rclpy.time.Time()):
+            try:
+                return self.buffer.lookup_transform(self.world_frame, frame, when)
+            except tf2_ros.TransformException:
+                continue
+        return None
+
+    def record(self, stream: Stream, filename: str, stamp, frame_id: str):
+        """Append one row to the stream's index, pairing the file with time and pose."""
+        transform = self.pose_of(frame_id, stamp)
+        row = [filename, f'{stamp_to_float(stamp):.9f}', (frame_id or '').lstrip('/')]
+        if transform is None:
+            row += [''] * 7
+        else:
+            t = transform.transform.translation
+            q = transform.transform.rotation
+            row += [f'{t.x:.6f}', f'{t.y:.6f}', f'{t.z:.6f}',
+                    f'{q.x:.9f}', f'{q.y:.9f}', f'{q.z:.9f}', f'{q.w:.9f}']
+        stream.index().writerow(row)
+        stream.count += 1
+
+    def basename(self, stream: Stream, stamp) -> str:
+        return f'{stream.name}_{stamp.sec:010d}_{stamp.nanosec:09d}'
+
+    # ---------------------------------------------------------------- images
+
+    def on_image_rgb(self, msg: Image, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        try:
+            img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as err:
+            self.get_logger().warn(f'{stream.name}: cannot convert image: {err}')
+            return
+        if stream.image_format in ('jpg', 'jpeg'):
+            name = self.basename(stream, msg.header.stamp) + '.jpg'
+            params = [cv2.IMWRITE_JPEG_QUALITY, stream.jpeg_quality]
+        else:
+            name = self.basename(stream, msg.header.stamp) + '.png'
+            params = []
+        cv2.imwrite(os.path.join(stream.dir, name), img, params)
+        self.record(stream, name, msg.header.stamp, msg.header.frame_id)
+
+    def on_image_depth(self, msg: Image, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        try:
+            depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as err:
+            self.get_logger().warn(f'{stream.name}: cannot convert depth: {err}')
+            return
+        depth = np.asarray(depth, dtype=np.float32)
+        # Metres to millimetres in uint16: 0 means "no return", which is the usual convention
+        # for depth PNGs and keeps the files loadable by OpenCV and PIL alike.
+        scaled = np.where(np.isfinite(depth), depth * self.depth_scale, 0.0)
+        scaled = np.clip(scaled, 0, 65535).astype(np.uint16)
+        name = self.basename(stream, msg.header.stamp) + '.png'
+        cv2.imwrite(os.path.join(stream.dir, name), scaled)
+        self.record(stream, name, msg.header.stamp, msg.header.frame_id)
+
+    def on_image_thermal(self, msg: Image, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        try:
+            raw = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        except Exception as err:
+            self.get_logger().warn(f'{stream.name}: cannot convert thermal: {err}')
+            return
+        raw = np.asarray(raw)
+        if raw.dtype != np.uint16:
+            raw = raw.astype(np.uint16)
+        name = self.basename(stream, msg.header.stamp) + '.png'
+        cv2.imwrite(os.path.join(stream.dir, name), raw)
+        self.record(stream, name, msg.header.stamp, msg.header.frame_id)
+
+    # ------------------------------------------------------------ pointcloud
+
+    def on_pointcloud(self, msg: PointCloud2, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        xyz, rgb = read_points(msg)
+        if xyz is None or xyz.shape[0] == 0:
+            return
+
+        frame_id = msg.header.frame_id
+        if stream.transform:
+            transform = self.pose_of(frame_id, msg.header.stamp)
+            if transform is None:
+                self.get_logger().warn(
+                    f'{stream.name}: no tf {self.world_frame} <- {frame_id}, skipping cloud')
+                return
+            t = transform.transform.translation
+            xyz = xyz @ quat_matrix(transform.transform.rotation).T
+            xyz = xyz + np.array([t.x, t.y, t.z], dtype=np.float32)
+
+        base = self.basename(stream, msg.header.stamp)
+        written = []
+        if 'pcd' in stream.formats:
+            write_pcd(os.path.join(stream.dir, base + '.pcd'), xyz, rgb)
+            written.append('.pcd')
+        if 'ply' in stream.formats:
+            write_ply(os.path.join(stream.dir, base + '.ply'), xyz, rgb)
+            written.append('.ply')
+        if not written:
+            return
+        self.record(stream, base + '|'.join(written), msg.header.stamp, frame_id)
+
+    # ------------------------------------------------------------ scalar CSV
+
+    def on_imu(self, msg: Imu, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        o, w, a = msg.orientation, msg.angular_velocity, msg.linear_acceleration
+        stream.table().writerow([
+            f'{stamp_to_float(msg.header.stamp):.9f}', msg.header.frame_id.lstrip('/'),
+            o.x, o.y, o.z, o.w, w.x, w.y, w.z, a.x, a.y, a.z])
+        stream.count += 1
+
+    def on_magnetometer(self, msg: MagneticField, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        f = msg.magnetic_field
+        stream.table().writerow([
+            f'{stamp_to_float(msg.header.stamp):.9f}', msg.header.frame_id.lstrip('/'),
+            f.x, f.y, f.z])
+        stream.count += 1
+
+    def on_pressure(self, msg: FluidPressure, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        stream.table().writerow([
+            f'{stamp_to_float(msg.header.stamp):.9f}', msg.header.frame_id.lstrip('/'),
+            msg.fluid_pressure, msg.variance])
+        stream.count += 1
+
+    def on_navsat(self, msg: NavSatFix, stream: Stream):
+        if not stream.due(stamp_to_float(msg.header.stamp)):
+            return
+        cov = msg.position_covariance
+        stream.table().writerow([
+            f'{stamp_to_float(msg.header.stamp):.9f}', msg.header.frame_id.lstrip('/'),
+            f'{msg.latitude:.9f}', f'{msg.longitude:.9f}', f'{msg.altitude:.3f}',
+            msg.status.status, msg.status.service, msg.position_covariance_type,
+            cov[0], cov[4], cov[8]])
+        stream.count += 1
+        if math.isfinite(msg.latitude) and math.isfinite(msg.longitude):
+            stream.gpx_points.append(
+                (msg.latitude, msg.longitude, msg.altitude, stamp_to_float(msg.header.stamp)))
+
+    # ----------------------------------------------------------------- audio
+
+    def on_audio(self, msg: RawAudio, stream: Stream):
+        if msg.format != 'pcm-s16':
+            self.get_logger().warn(f'{stream.name}: unsupported audio format {msg.format}')
+            return
+        if stream.wav is None:
+            stream.wav_path = os.path.join(stream.dir, f'{stream.name}.wav')
+            stream.wav = wave.open(stream.wav_path, 'wb')
+            stream.wav.setnchannels(max(1, msg.number_of_channels))
+            stream.wav.setsampwidth(2)
+            stream.wav.setframerate(msg.sample_rate)
+            # One continuous file, so the index only needs the moment it started.
+            self.record(stream, os.path.basename(stream.wav_path), msg.timestamp,
+                        self.drone_frame)
+        stream.wav.writeframes(bytes(msg.data))
+
+    # ----------------------------------------------------------- camera_info
+
+    def on_camera_info(self, msg: CameraInfo, stream: Stream):
+        # Intrinsics do not change, so one file is enough.
+        path = os.path.join(stream.dir, f'{stream.name}.json')
+        if os.path.exists(path):
+            return
+        with open(path, 'w', encoding='utf-8') as handle:
+            json.dump({
+                'frame_id': msg.header.frame_id.lstrip('/'),
+                'width': msg.width, 'height': msg.height,
+                'distortion_model': msg.distortion_model,
+                'D': list(msg.d), 'K': list(msg.k), 'R': list(msg.r), 'P': list(msg.p),
+            }, handle, indent=2)
+        stream.count += 1
+
+    # ------------------------------------------------------------- bookkeeping
+
+    def log_pose(self):
+        try:
+            tr = self.buffer.lookup_transform(
+                self.world_frame, self.drone_frame, rclpy.time.Time())
+        except tf2_ros.TransformException:
+            return
+        t, q = tr.transform.translation, tr.transform.rotation
+        self.pose_writer.writerow([
+            f'{stamp_to_float(tr.header.stamp):.9f}',
+            f'{t.x:.6f}', f'{t.y:.6f}', f'{t.z:.6f}',
+            f'{q.x:.9f}', f'{q.y:.9f}', f'{q.z:.9f}', f'{q.w:.9f}'])
+
+    def copy_ground_truth(self):
+        """Copy the source-of-truth files so the archive can be scored offline."""
+        files = self.config.get('ground_truth_files', [])
+        if not files:
+            return
+        out = os.path.join(self.session_dir, 'ground_truth')
+        os.makedirs(out, exist_ok=True)
+        for path in files:
+            path = os.path.expanduser(path)
+            if os.path.isfile(path):
+                shutil.copy2(path, out)
+            else:
+                self.get_logger().warn(f'Ground truth file not found: {path}')
+
+    def write_gpx(self, stream: Stream):
+        if not stream.gpx_points:
+            return
+        head = ('<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<gpx version="1.1" creator="as2_gazebo_assets sensor_recorder" '
+                'xmlns="http://www.topografix.com/GPX/1/1">\n'
+                f'  <trk><name>{stream.name}</name><trkseg>\n')
+        body = []
+        for lat, lon, alt, when in stream.gpx_points:
+            iso = datetime.datetime.utcfromtimestamp(when).isoformat() + 'Z'
+            body.append(f'    <trkpt lat="{lat:.9f}" lon="{lon:.9f}">'
+                        f'<ele>{alt:.3f}</ele><time>{iso}</time></trkpt>\n')
+        with open(os.path.join(stream.dir, f'{stream.name}.gpx'), 'w', encoding='utf-8') as fh:
+            fh.write(head)
+            fh.writelines(body)
+            fh.write('  </trkseg></trk>\n</gpx>\n')
+
+    def write_manifest(self):
+        manifest = {
+            'session': os.path.basename(self.session_dir),
+            'started': self.started,
+            'world_frame': self.world_frame,
+            'drone_frame': self.drone_frame,
+            'conventions': {
+                'depth_png': f'uint16 PNG, {self.depth_scale:g} counts per metre, 0 = no return',
+                'thermal_png': (f'uint16 PNG, {self.thermal_res:g} K per count '
+                                '(value * scale = kelvin)'),
+                'point_clouds': 'PCD (binary) and PLY (binary little endian), metres',
+                'audio': 'WAV, PCM signed 16 bit little endian',
+                'index_csv': ('one row per file: filename, stamp (s), frame_id and the pose of '
+                              'that frame in world_frame as position + xyzw quaternion'),
+            },
+            'trajectory': 'trajectory.csv',
+            'streams': [{
+                'name': s.name,
+                'topic': s.topic,
+                'kind': s.kind,
+                'directory': s.name,
+                'files_written': s.count,
+                'messages_skipped_by_rate_limit': s.dropped,
+                'max_hz': s.max_hz,
+                'in_world_frame': s.transform,
+            } for s in self.streams],
+        }
+        if self.map is not None:
+            manifest['point_cloud_map'] = {
+                'files': [self.map.filename + '.' + f for f in self.map.formats],
+                'frame': self.world_frame,
+                'units': 'metres',
+                'points': int(self.map.xyz.shape[0]),
+                'points_ingested': int(self.map.points_in),
+                'clouds_merged': int(self.map.clouds_in),
+                'voxel_size_m': self.map.voxel,
+                'colour': {
+                    'from_sensor': 'clouds that carry rgb (the RGBD camera) keep their own',
+                    'from_camera': ('lidar points projected into the colour camera; '
+                                    f'{int(self.map.colored_from_camera)} points coloured '
+                                    'this way'),
+                    'fallback': (f'height ramp over {self.map.height_range} m'
+                                 if self.map.fallback == 'height' else 'neutral grey'),
+                },
+                'sources': {topic: info['clouds'] for topic, info in self.map.sources.items()},
+            }
+        with open(os.path.join(self.session_dir, 'manifest.json'), 'w', encoding='utf-8') as fh:
+            json.dump(manifest, fh, indent=2)
+
+    def finish(self):
+        for stream in self.streams:
+            if stream.kind == 'navsat':
+                self.write_gpx(stream)
+            stream.close()
+        self.pose_handle.close()
+        if self.map is not None:
+            written = self.map.write()
+            if written:
+                self.get_logger().info(
+                    f'Final map: {self.map.xyz.shape[0]} points -> {", ".join(written)}')
+        self.write_manifest()
+        self.get_logger().info(f'Recording closed: {self.session_dir}')
+
+
+def main():
+    rclpy.init()
+    node = SensorRecorder()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.finish()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

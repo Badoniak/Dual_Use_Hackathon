@@ -1,0 +1,29 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+    <model name="collapsed_fire_station">
+        <static>true</static>
+        <link name="link">
+            <collision name="collision">
+                <geometry>
+                    <mesh>
+                        <uri>model://fire_station_collapsed/meshes/collapsed_fire_station.dae</uri>
+                    </mesh>
+                </geometry>
+            </collision>
+            <visual name="visual">
+                <geometry>
+                    <mesh>
+                        <uri>model://fire_station_collapsed/meshes/collapsed_fire_station.dae</uri>
+                    </mesh>
+                </geometry>
+                <!-- Without this the whole structure renders at ambient and the thermal image
+                     is featureless. 297 K (24 C) is masonry that has been in the sun. -->
+                <plugin
+                    filename="ignition-gazebo-thermal-system"
+                    name="ignition::gazebo::systems::Thermal">
+                    <temperature>297.0</temperature>
+                </plugin>
+            </visual>
+        </link>
+    </model>
+</sdf>

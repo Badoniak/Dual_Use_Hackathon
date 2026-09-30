@@ -1,0 +1,55 @@
+{
+    "world_name": "disaster_site",
+    "origin": {
+        "latitude": 52.2297,
+        "longitude": 21.0122,
+        "altitude": 0.0
+    },
+    "drones": [
+        {
+            "model_type": "quadrotor_base",
+            "model_name": "drone0",
+            "xyz": [0.0, 0.0, 0.3],
+            "payload": [
+                {
+                    "model_type": "rgbd_camera",
+                    "model_name": "rgbd_camera",
+                    "xyz": [0.1, 0.0, 0.05]
+                },
+                {
+                    "model_type": "hd_camera",
+                    "model_name": "hd_camera",
+                    "xyz": [0.1, 0.0, 0.1]
+                },
+                {
+                    "model_type": "lidar_3d",
+                    "model_name": "lidar_3d",
+                    "xyz": [0.0, 0.0, 0.15]
+                },
+                {
+                    "model_type": "thermal_camera",
+                    "model_name": "thermal_camera",
+                    "xyz": [0.1, 0.0, 0.0]
+                },
+                {
+                    "model_type": "microphone",
+                    "model_name": "microphone",
+                    "xyz": [0.0, 0.0, -0.03]
+                },
+                {
+                    "model_type": "gps",
+                    "model_name": "gps",
+                    "xyz": [0.0, 0.0, 0.1]
+                },
+                {
+                    "model_type": "magnetometer",
+                    "model_name": "magnetometer"
+                },
+                {
+                    "model_type": "air_pressure",
+                    "model_name": "air_pressure"
+                }
+            ]
+        }
+    ]
+}
