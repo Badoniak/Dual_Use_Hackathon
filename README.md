@@ -166,6 +166,8 @@ Dane czujników pochodzą z jednej sesji Gazebo; przy obszarze w innym miejscu s
 | `src/engine/engine.ts` | zegar misji i drony (start → przelot → lądowanie → pomiar → powrót / wymiana baterii) |
 
 ---
+## 📚 Użycie generatywnego AI
+Modele językowe i generatywne AI zostało użyte do: Stworzenia dokumentu z podsumowaniem zebranych informacji, pisania kodu aplikacji, edycji kodu symulacji dronów 
 
 ## 📚 Źródła i Bibliografia
 
@@ -184,4 +186,4 @@ Dane czujników pochodzą z jednej sesji Gazebo; przy obszarze w innym miejscu s
 13 * M. Fernandez-Cortizas, M. Molina, P. Arias-Perez, R. Perez-Segui,
 D. Perez-Saura, and P. Campoy,  2023, ["Aerostack2: A software framework for
 developing multi-robot aerial systems"](https://arxiv.org/abs/2303.18237), ArXiv DOI 2303.18237.
-Oraz całe repozytorium Aerostack2 służące do symulacji
+Oraz całe repozytorium Aerostack2 służące do symulacji Please visit the [[Aerostack2 Documentation]](https://aerostack2.github.io) for a complete documentation.
