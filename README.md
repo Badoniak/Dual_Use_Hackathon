@@ -181,3 +181,7 @@ Dane czujników pochodzą z jednej sesji Gazebo; przy obszarze w innym miejscu s
 10. [*LoPRA Lab — urządzenia radiowe bez pozwolenia w Polsce*](https://note.com/lopra_lab/n/n24d8bdfc8c8f?hl=en)
 11. [*Tatromaniak — TOPR i pozwolenie UKE na lokalizację telefonów*](https://tatromaniak.pl/aktualnosci/topr-dostal-pozwolenie-na-sledzenie-telefonow-pomoze-to-w-ratowaniu-zaginionych/)
 12. [*Sensors & Software — georadary na dronach a przepisy*](https://www.sensoft.ca/gpr-resource-library/ground-penetrating-radar-gpr-and-drones-double-jeopardy/)
+13 * M. Fernandez-Cortizas, M. Molina, P. Arias-Perez, R. Perez-Segui,
+D. Perez-Saura, and P. Campoy,  2023, ["Aerostack2: A software framework for
+developing multi-robot aerial systems"](https://arxiv.org/abs/2303.18237), ArXiv DOI 2303.18237.
+Oraz całe repozytorium Aerostack2 służące do symulacji
