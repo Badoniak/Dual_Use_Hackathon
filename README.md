@@ -176,3 +176,8 @@ Dane czujników pochodzą z jednej sesji Gazebo; przy obszarze w innym miejscu s
 5. **UKE / Akty Prawne PL** – [*Rozporządzenie ws. urządzeń radiowych nadających bez pozwolenia (GPR/WPR EN 302 066)*](https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20220002446)
 6. **EASA / ULC** – [*Wytyczne dla lotów UAV w kategorii szczególnej (SORA / NSTS)*](https://www.ulc.gov.pl/pl/drony)
 7. **Centum RT** – [*Lifeseeker Airborne SAR System for Mobile Phone Search*](https://centum-rt.com/lifeseeker/)
+8. [*Decyzja wykonawcza Komisji (UE) 2019/785 w sprawie UWB*](https://docdb.cept.org/download/165)
+9. [*Podręcznik „Jak kupować drony i usługi dronowe w zamówieniach publicznych”*](https://fundusze.malopolska.pl/sites/default/files/2024/02/6786/Podrecznik_Jak_kupowac_drony_i_uslugi_dronowe_w_zamowieniach_publicznych_ISBN_978-83-62824-09-0_internet.pdf)
+10. [*LoPRA Lab — urządzenia radiowe bez pozwolenia w Polsce*](https://note.com/lopra_lab/n/n24d8bdfc8c8f?hl=en)
+11. [*Tatromaniak — TOPR i pozwolenie UKE na lokalizację telefonów*](https://tatromaniak.pl/aktualnosci/topr-dostal-pozwolenie-na-sledzenie-telefonow-pomoze-to-w-ratowaniu-zaginionych/)
+12. [*Sensors & Software — georadary na dronach a przepisy*](https://www.sensoft.ca/gpr-resource-library/ground-penetrating-radar-gpr-and-drones-double-jeopardy/)
