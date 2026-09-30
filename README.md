@@ -123,12 +123,22 @@ Lądowanie eliminuje zakłócenia fazowe echa powierzchniowego i szum rotorów, 
 Ze względu na ograniczenia czasowe hackathonu, prezentujemy **działający prototyp w symulacji (ROS 2 + Gazebo)** z pełnym przepływem danych:
 
 1. **Środowisko 3D (Gazebo):** Model gruzowiska 3D + Dron Fazy 1 mapujący obszar symulowanym Lidarem.
-2. **Generowanie Hot Spotów:** Przetworzenie chmury punktów w ROS 2, wyznaczenie bezpiecznych lądowisk i stref przebywania ludzi.
-3. **Syntetyczny Radar i Detekcja:** Autorski moduł przetwarzania sygnału radaru w Python/C++:
+   <img width="1666" height="835" alt="gaz" src="https://github.com/user-attachments/assets/08a5f068-3499-45f1-a762-2fb8357df260" />
+
+3. **Generowanie Hot Spotów:** Przetworzenie chmury punktów w ROS 2, wyznaczenie bezpiecznych lądowisk i stref przebywania ludzi.
+   <img width="1919" height="912" alt="fuzja" src="https://github.com/user-attachments/assets/8cef4d30-af0c-47fd-83ff-7cdfea96920a" />
+
+5. **Syntetyczny Radar i Detekcja:** Autorski moduł przetwarzania sygnału radaru w Python/C++:
    * Filtracja pasmowa ($0,1 – 2\text{ Hz}$).
    * Wykrywanie wzorców oddechowych ($0,2 – 0,3\text{ Hz}$) oraz tętna ($1 – 1,5\text{ Hz}$).
    * Odporność na szum środowiskowy i ruchy ratowników wokół.
-4. **Interfejs Ratownika (Dashboard GUI):** Wizualizacja offline w czasie rzeczywistym z możliwością zatwierdzania trafień i eksportem do formatu `GeoJSON`/`KML`.
+<img width="1919" height="918" alt="koniec" src="https://github.com/user-attachments/assets/8b610ead-5052-4612-88ea-82927bb6ed00" />
+<img width="1919" height="920" alt="ludzie" src="https://github.com/user-attachments/assets/8a4e3709-51a9-4464-9416-0c6bd2ebdc1d" />
+
+<img width="293" height="289" alt="legenda" src="https://github.com/user-attachments/assets/c49994b1-5adf-4cd7-b1c4-cf0af2762b1c" />
+<img width="350" height="714" alt="lidar" src="https://github.com/user-attachments/assets/35f3e112-c4ef-4532-895e-3394f3e5ef7e" />
+
+6. **Interfejs Ratownika (Dashboard GUI):** Wizualizacja offline w czasie rzeczywistym z możliwością zatwierdzania trafień i eksportem do formatu `GeoJSON`/`KML`.
 
 ### Uruchomienie stacji naziemnej (aplikacja web)
 
