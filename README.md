@@ -1,4 +1,4 @@
-# 🚁 Rojowy System Dronów Ratowniczych z Radarem Life-Detection
+# 🚁 PRZEŚWIT - System zarządzania dronami do szukania osób zaginionych
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![ROS 2](https://img.shields.io/badge/ROS2-Humble%20%2F%20Jazzy-orange)
