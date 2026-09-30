@@ -183,7 +183,9 @@ Modele językowe i generatywne AI zostało użyte do: Stworzenia dokumentu z pod
 10. [*LoPRA Lab — urządzenia radiowe bez pozwolenia w Polsce*](https://note.com/lopra_lab/n/n24d8bdfc8c8f?hl=en)
 11. [*Tatromaniak — TOPR i pozwolenie UKE na lokalizację telefonów*](https://tatromaniak.pl/aktualnosci/topr-dostal-pozwolenie-na-sledzenie-telefonow-pomoze-to-w-ratowaniu-zaginionych/)
 12. [*Sensors & Software — georadary na dronach a przepisy*](https://www.sensoft.ca/gpr-resource-library/ground-penetrating-radar-gpr-and-drones-double-jeopardy/)
-13 * M. Fernandez-Cortizas, M. Molina, P. Arias-Perez, R. Perez-Segui,
+13. **Drony w poszukiwaniu osób**[*Poszukiwanie i detekcja  osób zaginionych w zawalonych budynkach*](https://www.researchgate.net/publication/376501482_Detection_and_Monitoring_of_People_in_Collapsed_Buildings_Using_a_Rotating_Radar_on_a_UAV)
+14. M. Fernandez-Cortizas, M. Molina, P. Arias-Perez, R. Perez-Segui,
 D. Perez-Saura, and P. Campoy,  2023, ["Aerostack2: A software framework for
 developing multi-robot aerial systems"](https://arxiv.org/abs/2303.18237), ArXiv DOI 2303.18237.
 Oraz całe repozytorium Aerostack2 służące do symulacji Please visit the [[Aerostack2 Documentation]](https://aerostack2.github.io) for a complete documentation.
+15. **Tłumienie fal w betonie**[*Artykuł na temat rozchodzenia i tłumienia fal elektromagnetycznych w betonie*](https://www.eiwellspring.org/tech/Shielding_by_building_materials.htm)
